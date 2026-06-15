@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8"/>
@@ -212,9 +212,15 @@ let newCat={type:"shared",name:""};
 let splitVal=50;
 let editCatIdx=null;
 let editCatVal="";
+let projMonths=12;
+let projExpandedRec=null;
+let projOverrideEdit=null;
+let projOverrideVal="";
+let projAmorId=null;
+let projAmorData={balance:"",rate:"",months:""};
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
-const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["historial","📋","Historial"],["cuentas","🗂️","Cuentas"],["viajes","✈️","Viajes"],["prestamos","🤝","Préstamos"],["graficas","📈","Gráficas"],["ajustes","⚙️","Ajustes"]];
+const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["historial","📋","Historial"],["cuentas","🗂️","Cuentas"],["viajes","✈️","Viajes"],["prestamos","🤝","Préstamos"],["graficas","📈","Gráficas"],["proyeccion","📉","Proyec."],["ajustes","⚙️","Ajustes"]];
 
 function renderNav(){
   const nav=document.getElementById("nav");
@@ -237,7 +243,7 @@ function render(){
   document.getElementById("hdr-title").textContent=`💑 ${d.names.A} & ${d.names.B}`;
   document.getElementById("hdr-sub").textContent=`División ${d.split.A}/${d.split.B}`;
   renderNav();
-  const views={resumen:renderResumen,agregar:renderAgregar,historial:renderHistorial,cuentas:renderCuentas,viajes:renderViajes,prestamos:renderPrestamos,graficas:renderGraficas,ajustes:renderAjustes};
+  const views={resumen:renderResumen,agregar:renderAgregar,historial:renderHistorial,cuentas:renderCuentas,viajes:renderViajes,prestamos:renderPrestamos,graficas:renderGraficas,proyeccion:renderProyeccion,ajustes:renderAjustes};
   document.getElementById("content").innerHTML=(views[tab]||renderResumen)();
   bindEvents();
 }
@@ -756,9 +762,9 @@ function renderPrestamos(){
             <button class="btn-sm" style="background:#4caf80;color:#fff;flex-shrink:0;" onclick="doLoanPayCustom('${loan.id}',${rem})">Pagar</button>
           </div>
         </div>
-        ${loan.payments.length>0?`<div style="margin-top:12px;">
+        ${(loan.payments||[]).length>0?`<div style="margin-top:12px;">
           <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">HISTORIAL DE PAGOS</div>
-          ${loan.payments.slice().reverse().map(p=>`<div class="row" style="margin-bottom:4px;"><span style="font-size:11px;color:#6060a0;font-family:monospace;">${p.date}</span><span style="font-size:11px;color:#4caf80;font-family:monospace;">+${fmt(p.amount)}</span></div>`).join("")}
+          ${(loan.payments||[]).slice().reverse().map(p=>`<div class="row" style="margin-bottom:4px;"><span style="font-size:11px;color:#6060a0;font-family:monospace;">${p.date}</span><span style="font-size:11px;color:#4caf80;font-family:monospace;">+${fmt(p.amount)}</span></div>`).join("")}
         </div>`:""}
         <div style="margin-top:10px;text-align:right;">
           <span style="font-size:11px;cursor:pointer;color:${confirmDeleteLoanId===loan.id?"#ef5350":"#4a4a6a"};font-family:monospace;" onclick="doDeleteLoan('${loan.id}')">${confirmDeleteLoanId===loan.id?"¿Eliminar? Toca de nuevo":"🗑️ eliminar"}</span>
@@ -1415,6 +1421,295 @@ async function doDeleteCatFromBtn(btn){
   if(!name)return;
   const d=D();
   await persist({...d,cats:{...d.cats,[type]:(d.cats[type]||[]).filter(c=>c!==name)}});
+}
+
+// ── Proyección ─────────────────────────────────────────────────────────────
+function buildProjection(d,n){
+  n=n||12;
+  const rows=[];
+  const now=new Date();
+  for(let i=0;i<n;i++){
+    const date=new Date(now.getFullYear(),now.getMonth()+i,1);
+    const yr=date.getFullYear();
+    const mo=String(date.getMonth()+1).padStart(2,"0");
+    const key=yr+"-"+mo;
+    let income=0,expenses=0;
+    (d.recurring||[]).forEach(r=>{
+      const amt=(r.overrides&&r.overrides[key]!=null)?r.overrides[key]:r.amount;
+      if(r.type==="income")income+=amt;
+      else expenses+=amt;
+    });
+    rows.push({key,mo,income,expenses,net:income-expenses});
+  }
+  return rows;
+}
+
+function buildProjChart(proj){
+  if(!proj||proj.length<1)return"";
+  const n=proj.length;
+  const W=Math.max(360,n*40),H=180;
+  const pL=4,pR=4,pT=14,pB=28;
+  const cW=W-pL-pR,cH=H-pT-pB;
+  const MNAMES=["ENE","FEB","MAR","ABR","MAY","JUN","JUL","AGO","SEP","OCT","NOV","DIC"];
+  const allVals=proj.flatMap(p=>[p.income,p.expenses,p.net,0]);
+  const minV=Math.min(...allVals);
+  const maxV=Math.max(...allVals,1);
+  const range=maxV-minV||1;
+  const scY=v=>pT+cH*(1-(v-minV)/range);
+  const zY=scY(0);
+  const bw=Math.max(6,Math.floor(cW/n*0.38));
+  const gW=cW/n;
+  let shapes="",netPts=[];
+  proj.forEach((p,i)=>{
+    const cx=pL+gW*i+gW/2;
+    const x1=cx-bw-1,x2=cx+1;
+    if(p.income>0){const y=scY(p.income);shapes+=`<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" width="${bw}" height="${Math.max(1,zY-y).toFixed(1)}" rx="2" fill="#4caf8070"/>`;}
+    if(p.expenses>0){const y=scY(p.expenses);shapes+=`<rect x="${x2.toFixed(1)}" y="${y.toFixed(1)}" width="${bw}" height="${Math.max(1,zY-y).toFixed(1)}" rx="2" fill="#ef535070"/>`;}
+    const moIdx=parseInt(p.key.slice(5))-1;
+    shapes+=`<text x="${cx.toFixed(1)}" y="${(H-6).toFixed(1)}" text-anchor="middle" font-size="8" fill="#3a3a5a" font-family="monospace">${MNAMES[moIdx]||p.key.slice(5)}</text>`;
+    const ny=Math.max(pT+1,Math.min(pT+cH-1,scY(p.net)));
+    netPts.push([cx,ny]);
+  });
+  const netPath=netPts.map((pt,i)=>(i===0?"M":"L")+pt[0].toFixed(1)+" "+pt[1].toFixed(1)).join(" ");
+  const netDots=netPts.map(pt=>`<circle cx="${pt[0].toFixed(1)}" cy="${pt[1].toFixed(1)}" r="2.5" fill="#c9a227"/>`).join("");
+  const gridLines=[0.25,0.5,0.75].map(f=>{
+    const y=(pT+cH*(1-f)).toFixed(1);
+    return`<line x1="${pL}" x2="${W-pR}" y1="${y}" y2="${y}" stroke="#1e1e3a" stroke-width="0.5"/>`;
+  }).join("");
+  return`<div style="overflow-x:auto;background:#08080f;border-radius:8px;padding:4px 2px;margin:0 -2px;">
+  <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block;">
+    ${gridLines}
+    <line x1="${pL}" x2="${W-pR}" y1="${zY.toFixed(1)}" y2="${zY.toFixed(1)}" stroke="#2a2a4a" stroke-width="1"/>
+    ${shapes}
+    <path d="${netPath}" fill="none" stroke="#c9a227" stroke-width="2" stroke-linejoin="round"/>
+    ${netDots}
+  </svg>
+  </div>
+  <div style="display:flex;gap:14px;justify-content:center;margin-top:6px;">
+    <span style="font-size:10px;font-family:monospace;color:#4caf80;">■ Ingresos</span>
+    <span style="font-size:10px;font-family:monospace;color:#ef5350;">■ Egresos</span>
+    <span style="font-size:10px;font-family:monospace;color:#c9a227;">— Flujo neto</span>
+  </div>`;
+}
+
+function amortize(balance,monthlyRate,months){
+  if(!balance||!monthlyRate||!months||months<1)return[];
+  const payment=balance*monthlyRate/(1-Math.pow(1+monthlyRate,-months));
+  const rows=[];
+  let rem=balance;
+  for(let m=0;m<months&&rem>0.5;m++){
+    const interest=rem*monthlyRate;
+    const principal=Math.min(payment-interest,rem);
+    rem-=principal;
+    rows.push({m:m+1,payment:Math.round(payment),interest:Math.round(interest),principal:Math.round(principal),remaining:Math.max(0,Math.round(rem))});
+  }
+  return rows;
+}
+
+function renderAmortSection(r){
+  const rate=parseFloat(projAmorData.rate)/100||0;
+  const bal=Number((projAmorData.balance||"").replace(/[^0-9]/g,"")||0);
+  const months=parseInt(projAmorData.months)||0;
+  const rows=rate&&bal&&months?amortize(bal,rate,months):[];
+  const totalInterest=rows.reduce((s,rw)=>s+rw.interest,0);
+  return`<div style="border-top:1px solid #1e1e3a;margin-top:8px;padding-top:12px;">
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:90px;">
+        <div class="fl">Saldo actual</div>
+        <input type="text" style="margin:0;font-size:13px;padding:8px 10px;" value="${fmtInit(projAmorData.balance)}" oninput="fmtAmountInput(this,v=>{projAmorData.balance=v})" placeholder="Ej: 50.000.000"/>
+      </div>
+      <div style="flex:1;min-width:90px;">
+        <div class="fl">Tasa mensual %</div>
+        <input type="text" style="margin:0;font-size:13px;padding:8px 10px;" value="${projAmorData.rate}" oninput="projAmorData.rate=this.value" placeholder="Ej: 1.2"/>
+      </div>
+      <div style="flex:1;min-width:90px;">
+        <div class="fl">Plazo (meses)</div>
+        <input type="text" style="margin:0;font-size:13px;padding:8px 10px;" value="${projAmorData.months}" oninput="projAmorData.months=this.value" placeholder="Ej: 120"/>
+      </div>
+    </div>
+    <button class="btn btn-dark" style="margin-bottom:10px;" onclick="render()">Calcular amortización →</button>
+    ${rows.length>0?`
+      <div style="font-size:12px;color:#4caf80;font-family:monospace;margin-bottom:8px;">Cuota mensual: ${fmt(rows[0].payment)} &nbsp;·&nbsp; Total intereses: ${fmt(totalInterest)}</div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead><tr style="border-bottom:1px solid #1e1e3a;">
+            <th style="text-align:right;font-family:monospace;font-size:9px;color:#4a4a6a;text-transform:uppercase;padding:4px 6px;">#</th>
+            <th style="text-align:right;font-family:monospace;font-size:9px;color:#f0eff4;text-transform:uppercase;padding:4px 6px;">Cuota</th>
+            <th style="text-align:right;font-family:monospace;font-size:9px;color:#64b5f6;text-transform:uppercase;padding:4px 6px;">Capital</th>
+            <th style="text-align:right;font-family:monospace;font-size:9px;color:#ef5350;text-transform:uppercase;padding:4px 6px;">Interés</th>
+            <th style="text-align:right;font-family:monospace;font-size:9px;color:#c9a227;text-transform:uppercase;padding:4px 6px;">Saldo</th>
+          </tr></thead>
+          <tbody>${rows.slice(0,24).map((rw,i)=>`
+            <tr style="border-bottom:1px solid #1e1e3a22;${i%2===0?"":"background:#0e0e1a55;"}">
+              <td style="font-family:monospace;color:#4a4a6a;text-align:right;padding:3px 6px;">${rw.m}</td>
+              <td style="font-family:monospace;color:#f0eff4;text-align:right;padding:3px 6px;">${fmtS(rw.payment)}</td>
+              <td style="font-family:monospace;color:#64b5f6;text-align:right;padding:3px 6px;">${fmtS(rw.principal)}</td>
+              <td style="font-family:monospace;color:#ef5350;text-align:right;padding:3px 6px;">${fmtS(rw.interest)}</td>
+              <td style="font-family:monospace;color:#c9a227;text-align:right;padding:3px 6px;">${fmtS(rw.remaining)}</td>
+            </tr>`).join("")}
+          ${rows.length>24?`<tr><td colspan="5" style="text-align:center;color:#4a4a6a;font-family:monospace;font-size:10px;padding:8px;">... ${rows.length-24} cuotas más (total: ${rows.length} meses)</td></tr>`:""}
+          </tbody>
+        </table>
+      </div>
+    `:`<div class="help-box" style="margin-top:0;">Ingresa saldo, tasa mensual y plazo para calcular.</div>`}
+  </div>`;
+}
+
+function renderProyeccion(){
+  const d=D();
+  const proj=buildProjection(d,projMonths);
+  const totalIncome=proj.reduce((s,p)=>s+p.income,0);
+  const totalExpenses=proj.reduce((s,p)=>s+p.expenses,0);
+  const avgNet=(totalIncome-totalExpenses)/projMonths;
+  const chart=buildProjChart(proj);
+  const statsHtml=`
+    <div style="display:flex;justify-content:space-around;margin-bottom:14px;text-align:center;">
+      <div><div class="fl">Ingresos prom/mes</div><div style="font-size:17px;font-weight:700;color:#4caf80;">${fmtS(totalIncome/projMonths)}</div></div>
+      <div style="width:1px;background:#1e1e3a;"></div>
+      <div><div class="fl">Egresos prom/mes</div><div style="font-size:17px;font-weight:700;color:#ef5350;">${fmtS(totalExpenses/projMonths)}</div></div>
+      <div style="width:1px;background:#1e1e3a;"></div>
+      <div><div class="fl">Flujo neto prom</div><div style="font-size:17px;font-weight:700;color:${avgNet>=0?"#4caf80":"#ef5350"};">${fmtS(avgNet)}</div></div>
+    </div>`;
+  const tableRows=proj.map(p=>`
+    <tr>
+      <td style="font-family:monospace;font-size:11px;color:#8080a0;padding:4px 6px;white-space:nowrap;">${p.key}</td>
+      <td style="font-family:monospace;font-size:12px;color:#4caf80;text-align:right;padding:4px 6px;">${fmtS(p.income)}</td>
+      <td style="font-family:monospace;font-size:12px;color:#ef5350;text-align:right;padding:4px 6px;">${fmtS(p.expenses)}</td>
+      <td style="font-family:monospace;font-size:13px;font-weight:600;text-align:right;padding:4px 6px;color:${p.net>=0?"#4caf80":"#ef5350"};">${fmtS(p.net)}</td>
+    </tr>`).join("");
+  const tableHtml=`
+    <div style="overflow-x:auto;margin-top:10px;border-top:1px solid #1e1e3a;padding-top:10px;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid #1e1e3a;">
+          <th style="text-align:left;font-family:monospace;font-size:9px;color:#4a4a6a;text-transform:uppercase;padding-bottom:6px;padding-left:6px;">Mes</th>
+          <th style="text-align:right;font-family:monospace;font-size:9px;color:#4caf80;text-transform:uppercase;padding-bottom:6px;">Ingresos</th>
+          <th style="text-align:right;font-family:monospace;font-size:9px;color:#ef5350;text-transform:uppercase;padding-bottom:6px;">Egresos</th>
+          <th style="text-align:right;font-family:monospace;font-size:9px;color:#c9a227;text-transform:uppercase;padding-bottom:6px;padding-right:6px;">Flujo</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>`;
+  const recItems=d.recurring||[];
+  const varItemsHtml=recItems.length===0?
+    `<div class="help-box">No tienes recurrentes. Agrégalos con el checkbox "recurrente" en la pestaña Agregar.</div>`:
+    recItems.map(r=>{
+      const isExpanded=projExpandedRec===r.id;
+      const overrides=r.overrides||{};
+      const ovCount=Object.keys(overrides).length;
+      const monthRows=isExpanded?proj.map(p=>{
+        const isEditing=projOverrideEdit&&projOverrideEdit.recId===r.id&&projOverrideEdit.monthKey===p.key;
+        const curAmt=(overrides[p.key]!=null)?overrides[p.key]:r.amount;
+        const isOv=overrides[p.key]!=null;
+        if(isEditing){
+          return`<div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #1e1e3a22;">
+            <span style="font-size:11px;color:#6060a0;font-family:monospace;min-width:64px;">${p.key}</span>
+            <input id="proj-ov-inp" type="text" style="flex:1;font-size:13px;margin:0;padding:6px 10px;" value="${fmtInit(projOverrideVal)}" oninput="fmtAmountInput(this,v=>projOverrideVal=v)" placeholder="${fmtInit(r.amount)}"/>
+            <button class="btn-sm" style="background:#4caf80;color:#fff;" onclick="event.stopPropagation();doSaveOverride()">✓</button>
+            <button class="btn-sm btn-dark" onclick="event.stopPropagation();projOverrideEdit=null;render()">✕</button>
+          </div>`;
+        }
+        return`<div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #1e1e3a22;">
+          <span style="font-size:11px;color:#6060a0;font-family:monospace;min-width:64px;">${p.key}</span>
+          <span style="flex:1;font-size:13px;font-family:monospace;color:${isOv?"#c9a227":"#f0eff4"};">${fmtS(curAmt)}</span>
+          <button class="btn-sm btn-dark" onclick="event.stopPropagation();doStartOverrideEdit(${r.id},'${p.key}',${curAmt})">✏️</button>
+          ${isOv?`<button class="btn-sm" style="background:#1e1e3a;color:#ef5350;border:1px solid #ef535033;" onclick="event.stopPropagation();doClearOverride(${r.id},'${p.key}')">✕</button>`:""}
+        </div>`;
+      }).join(""):"";
+      return`<div class="card" style="margin-bottom:8px;">
+        <div class="row" style="cursor:pointer;" onclick="doToggleProjRec(${r.id})">
+          <div>
+            <div style="font-size:13px;font-weight:600;">${icon(r.category)} ${r.description}</div>
+            <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:2px;">${r.type==="income"?"💰 Ingreso":"💸 Egreso"} · base: ${fmtS(r.amount)}${ovCount>0?" · "+ovCount+" ajuste"+(ovCount!==1?"s":""):""}</div>
+          </div>
+          <span style="font-size:13px;color:#4a4a6a;">${isExpanded?"▲":"▼"}</span>
+        </div>
+        ${isExpanded?`<div style="margin-top:6px;border-top:1px solid #1e1e3a;padding-top:6px;">${monthRows}</div>`:""}
+      </div>`;
+    }).join("");
+  const debtRecs=recItems.filter(r=>r.type==="expense"||r.type==="debt");
+  const amorHtml=debtRecs.length===0?"":debtRecs.map(r=>{
+    const isOpen=projAmorId===r.id;
+    return`<div class="card" style="margin-bottom:8px;">
+      <div class="row" style="cursor:pointer;" onclick="doToggleAmor(${r.id})">
+        <div>
+          <div style="font-size:13px;font-weight:600;">${icon(r.category)} ${r.description}</div>
+          <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:2px;">Cuota base: ${fmtS(r.amount)}</div>
+        </div>
+        <span style="font-size:13px;color:#4a4a6a;">${isOpen?"▲":"▼"}</span>
+      </div>
+      ${isOpen?renderAmortSection(r):""}
+    </div>`;
+  }).join("");
+  return`<div class="sec">
+    <div class="card">
+      <div class="ct">Proyección de flujo de caja</div>
+      <div class="help-box">Basado en tus ingresos y gastos recurrentes. Ajusta cuotas variables en la sección de abajo para refinarla.</div>
+      <div class="chips" style="margin-bottom:12px;">
+        ${[6,12,24].map(n=>`<div class="chip${projMonths===n?" on":""}" onclick="projMonths=${n};render()">${n} meses</div>`).join("")}
+      </div>
+      ${statsHtml}
+      ${chart}
+      ${tableHtml}
+    </div>
+    <div class="ct" style="margin-top:16px;padding-left:2px;">Cuotas variables por mes</div>
+    <div class="help-box">Toca un recurrente y edita su valor para un mes específico. Los cambios se reflejan en la proyección arriba.</div>
+    ${varItemsHtml}
+    ${debtRecs.length>0?`
+      <div class="ct" style="margin-top:16px;padding-left:2px;">Amortización de deudas</div>
+      <div class="help-box">Ingresa saldo pendiente, tasa mensual (%) y plazo para ver la tabla de pagos e intereses.</div>
+      ${amorHtml}
+    `:""}
+  </div>`;
+}
+
+function doToggleProjRec(id){
+  const rid=Number(id)||id;
+  projExpandedRec=projExpandedRec===rid?null:rid;
+  projOverrideEdit=null;
+  render();
+}
+
+function doToggleAmor(id){
+  const rid=Number(id)||id;
+  if(projAmorId!==rid)projAmorData={balance:"",rate:"",months:""};
+  projAmorId=projAmorId===rid?null:rid;
+  render();
+}
+
+function doStartOverrideEdit(recId,monthKey,curAmt){
+  projOverrideEdit={recId:Number(recId)||recId,monthKey};
+  projOverrideVal=String(curAmt||"");
+  render();
+  setTimeout(()=>{const inp=document.getElementById("proj-ov-inp");if(inp)inp.focus();},50);
+}
+
+async function doSaveOverride(){
+  if(!projOverrideEdit)return;
+  const{recId,monthKey}=projOverrideEdit;
+  const amt=Number(projOverrideVal);
+  if(isNaN(amt)){projOverrideEdit=null;render();return;}
+  const d=D();
+  const newRec=(d.recurring||[]).map(r=>{
+    if((Number(r.id)||r.id)!==recId)return r;
+    const overrides={...(r.overrides||{}),[monthKey]:amt};
+    return{...r,overrides};
+  });
+  projOverrideEdit=null;
+  await persist({...d,recurring:newRec});
+  showToast("✓ Cuota ajustada");
+}
+
+async function doClearOverride(recId,monthKey){
+  const rid=Number(recId)||recId;
+  const d=D();
+  const newRec=(d.recurring||[]).map(r=>{
+    if((Number(r.id)||r.id)!==rid)return r;
+    const ovs={...(r.overrides||{})};
+    delete ovs[monthKey];
+    return{...r,overrides:ovs};
+  });
+  await persist({...d,recurring:newRec});
+  showToast("✓ Cuota restablecida");
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────────
