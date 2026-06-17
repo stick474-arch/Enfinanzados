@@ -218,6 +218,9 @@ let projOverrideEdit=null;
 let projOverrideVal="";
 let projAmorId=null;
 let projAmorData={balance:"",rate:"",months:""};
+let qpDebtId=null;
+let qpDebtWho="A";
+let qpDebtAmt="";
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
 const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["historial","📋","Historial"],["cuentas","🗂️","Cuentas"],["viajes","✈️","Viajes"],["prestamos","🤝","Préstamos"],["graficas","📈","Gráficas"],["proyeccion","📉","Proyec."],["ajustes","⚙️","Ajustes"]];
@@ -393,16 +396,54 @@ function renderResumen(){
       </div>
     </div>
     ${alertsHtml}
-    ${(dS>0||dA>0||dB>0)?`<div class="card">
-      <div class="ct">Deudas activas</div>
-      ${dS>0?`<div class="row"><span class="lbl">Compartidas</span><span class="val red">${fmt(dS)}</span></div>
-      <div class="row"><span class="lbl">${d.names.A} asume</span><span class="val orange">${fmt(dS*spA)}</span></div>
-      <div class="row"><span class="lbl">${d.names.B} asume</span><span class="val orange">${fmt(dS*spB)}</span></div><div class="div"></div>`:""}
-      ${dA>0?`<div class="row"><span class="lbl">Deuda ${d.names.A}</span><span class="val red">${fmt(dA)}</span></div>`:""}
-      ${dB>0?`<div class="row"><span class="lbl">Deuda ${d.names.B}</span><span class="val red">${fmt(dB)}</span></div>`:""}
-    </div>`:""}
+    ${debts.length>0?renderDebtsCard(debts,d):""}
     ${goalsHtml}
   </div>`;
+}
+
+function renderDebtsCard(debts,d){
+  const sp=d.split||{A:50,B:50};
+  const spA=sp.A/100,spB=sp.B/100;
+  let html=`<div class="card"><div class="ct">Deudas · pago rápido de cuota</div>`;
+  debts.forEach(de=>{
+    const months=de.debtMonths||1;
+    const cuota=months>1?Math.round(de.amount/months):de.amount;
+    const isShared=de.user==="shared";
+    const isQp=qpDebtId===de.id;
+    const paysAmt=Number(qpDebtAmt)||cuota;
+    const owesAmt=qpDebtWho==="A"?Math.round(paysAmt*spB):Math.round(paysAmt*spA);
+    const owesName=qpDebtWho==="A"?d.names.B:d.names.A;
+    html+=`<div style="padding:10px 0;border-bottom:1px solid #1e1e3a22;">
+      <div class="row" style="margin-bottom:4px;">
+        <span style="font-size:13px;font-weight:600;">${icon(de.category)} ${de.description}</span>
+        <span class="tag" style="background:${isShared?"#c9a22718":"#1e1e3a"};color:${isShared?"#c9a227":"#6060a0"};border:1px solid ${isShared?"#c9a22744":"#2a2a4a"};">${isShared?"Compartida":nm(de.user)}</span>
+      </div>
+      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota ~${fmtS(cuota)}/mes · ${months} meses`:""}</div>`;
+    if(isQp){
+      html+=`<div style="background:#0e0e1a;border-radius:8px;padding:10px;border:1px solid #c9a22733;margin-top:4px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="font-size:12px;color:#8080a0;">Monto:</span>
+          <input id="qp-amt" type="text" style="flex:1;margin:0;font-size:14px;padding:7px 10px;" value="${fmtInit(qpDebtAmt||String(cuota))}" oninput="fmtAmountInput(this,v=>qpDebtAmt=v)" placeholder="${fmtInit(cuota)}"/>
+        </div>
+        ${isShared?`<div style="font-size:11px;color:#6060a0;font-family:monospace;margin-bottom:10px;">${nm(qpDebtWho)} pagó todo → <span style="color:#c9a227;font-weight:700;">${owesName} deberá ${fmtS(owesAmt)}</span> a ${nm(qpDebtWho)}</div>`:""}
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-green" style="margin:0;flex:1;padding:10px;font-size:13px;" onclick="doQuickPayDebt(${de.id})">✓ Confirmar</button>
+          <button class="btn btn-dark" style="margin:0;flex:1;padding:10px;font-size:13px;" onclick="qpDebtId=null;render()">✕</button>
+        </div>
+      </div>`;
+    }else{
+      html+=`<div style="display:flex;gap:6px;flex-wrap:wrap;">`;
+      if(isShared){
+        html+=`<button class="btn-sm" style="background:#64b5f618;border:1px solid #64b5f633;color:#64b5f6;padding:6px 10px;" data-id="${de.id}" data-who="A" data-amt="${cuota}" onclick="qpDebtId=Number(this.dataset.id);qpDebtWho=this.dataset.who;qpDebtAmt=this.dataset.amt;render()">${d.names.A} pagó</button>`;
+        html+=`<button class="btn-sm" style="background:#ff8a6518;border:1px solid #ff8a6533;color:#ff8a65;padding:6px 10px;" data-id="${de.id}" data-who="B" data-amt="${cuota}" onclick="qpDebtId=Number(this.dataset.id);qpDebtWho=this.dataset.who;qpDebtAmt=this.dataset.amt;render()">${d.names.B} pagó</button>`;
+      }else{
+        html+=`<button class="btn-sm" style="background:#4caf8018;border:1px solid #4caf8033;color:#4caf80;padding:6px 10px;" data-id="${de.id}" data-who="${de.user}" data-amt="${cuota}" onclick="qpDebtId=Number(this.dataset.id);qpDebtWho=this.dataset.who;qpDebtAmt=this.dataset.amt;render()">Registrar pago de cuota</button>`;
+      }
+      html+=`</div>`;
+    }
+    html+=`</div>`;
+  });
+  return html+`</div>`;
 }
 
 // ── Agregar ────────────────────────────────────────────────────────────────
@@ -1423,23 +1464,78 @@ async function doDeleteCatFromBtn(btn){
   await persist({...d,cats:{...d.cats,[type]:(d.cats[type]||[]).filter(c=>c!==name)}});
 }
 
+async function doQuickPayDebt(id){
+  const eid=Number(id)||id;
+  const d=D();
+  const de=(d.entries||[]).find(e=>e.id===eid);
+  if(!de)return;
+  const months=de.debtMonths||1;
+  const baseCuota=months>1?Math.round(de.amount/months):de.amount;
+  const amt=Number(qpDebtAmt)||baseCuota;
+  if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const sp=d.split||{A:50,B:50};
+  const entry={
+    id:Date.now(),date:today(),type:"expense",
+    user:de.user,category:de.category,
+    description:"Cuota "+de.description,
+    amount:amt,
+    paidBy:de.user==="shared"?qpDebtWho:null,
+    note:"Cuota de deuda",isRecurring:false,
+    registeredBy:qpDebtWho
+  };
+  qpDebtId=null;qpDebtAmt="";
+  await persist({...d,entries:[...(d.entries||[]),entry]});
+  if(de.user==="shared"){
+    const owes=qpDebtWho==="A"?d.names.B:d.names.A;
+    const owesAmt=Math.round(amt*(qpDebtWho==="A"?sp.B:sp.A)/100);
+    showToast(`✓ Cuota registrada — ${owes} debe ${fmtS(owesAmt)} a ${nm(qpDebtWho)}`);
+  }else{showToast("✓ Cuota registrada");}
+}
+
 // ── Proyección ─────────────────────────────────────────────────────────────
+function moKey(yr,mo){return yr+"-"+String(mo).padStart(2,"0");}
+function moElapsed(startKey,curKey){
+  const sy=parseInt(startKey.slice(0,4)),sm=parseInt(startKey.slice(5));
+  const cy=parseInt(curKey.slice(0,4)),cm=parseInt(curKey.slice(5));
+  return(cy-sy)*12+(cm-sm);
+}
+
 function buildProjection(d,n){
   n=n||12;
   const rows=[];
   const now=new Date();
+  // Pre-build set of recurring debt IDs to avoid double-counting
+  const recDebtCats=new Set((d.recurring||[]).filter(r=>r.type==="debt"&&(r.debtMonths||0)>1).map(r=>r.category+"|"+r.description));
   for(let i=0;i<n;i++){
     const date=new Date(now.getFullYear(),now.getMonth()+i,1);
-    const yr=date.getFullYear();
-    const mo=String(date.getMonth()+1).padStart(2,"0");
-    const key=yr+"-"+mo;
+    const key=moKey(date.getFullYear(),date.getMonth()+1);
     let income=0,expenses=0;
+    // Recurring items
     (d.recurring||[]).forEach(r=>{
-      const amt=(r.overrides&&r.overrides[key]!=null)?r.overrides[key]:r.amount;
-      if(r.type==="income")income+=amt;
-      else expenses+=amt;
+      const ov=(r.overrides&&r.overrides[key]!=null)?r.overrides[key]:null;
+      if(r.type==="debt"&&(r.debtMonths||0)>1){
+        const monthly=Math.round(r.amount/(r.debtMonths));
+        const startKey=(r.debtStart||key).slice(0,7);
+        const elapsed=moElapsed(startKey,key);
+        if(elapsed<0||elapsed>=(r.debtMonths))return;
+        expenses+=ov!=null?ov:monthly;
+      }else{
+        const amt=ov!=null?ov:r.amount;
+        if(r.type==="income")income+=amt;
+        else expenses+=amt;
+      }
     });
-    rows.push({key,mo,income,expenses,net:income-expenses});
+    // Non-recurring debt entries with installments (no duplicate with recurring)
+    (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring).forEach(e=>{
+      const startKey=(e.debtStart||e.date||"").slice(0,7);
+      if(!startKey)return;
+      const elapsed=moElapsed(startKey,key);
+      if(elapsed<0||elapsed>=(e.debtMonths))return;
+      // Skip if covered by a recurring item
+      if(recDebtCats.has(e.category+"|"+(e.description||"")))return;
+      expenses+=Math.round(e.amount/(e.debtMonths));
+    });
+    rows.push({key,mo:String(date.getMonth()+1).padStart(2,"0"),income,expenses,net:income-expenses});
   }
   return rows;
 }
