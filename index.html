@@ -181,10 +181,19 @@ function computeBalance(d){
       const paidA=e.paidBy==="A"?e.amount:0;
       netA+=paidA-fairA;
     }
+    // transfer entries: abonos, category settlements saved as entries
+    if(e.type==="transfer"){
+      if(e.paidBy==="B")netA-=e.amount; // B paid A → reduces B's debt to A
+      else if(e.paidBy==="A")netA+=e.amount; // A paid B → reduces A's debt to B
+    }
   });
-  // Settlements reduce the balance
+  // Legacy: full settlements stored in settled[]
   (d.settled||[]).forEach(s=>{
-    // if A was owed (from=B,to=A meaning B paid A), reduce netA
+    if(s.to==="A")netA-=s.amount;
+    else if(s.to==="B")netA+=s.amount;
+  });
+  // Legacy: per-category settlements stored in catSettled[] (fix: was not counted before)
+  (d.catSettled||[]).forEach(s=>{
     if(s.to==="A")netA-=s.amount;
     else if(s.to==="B")netA+=s.amount;
   });
@@ -228,6 +237,10 @@ let qpDebtId=null;
 let qpDebtAccount="";
 let qpDebtAmtA="";
 let qpDebtAmtB="";
+let showAbonoForm=false;
+let abonoAmt="";
+let abonoNote="";
+let abonoFrom="";
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
 const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["historial","📋","Historial"],["cuentas","🗂️","Cuentas"],["viajes","✈️","Viajes"],["prestamos","🤝","Préstamos"],["graficas","📈","Gráficas"],["proyeccion","📉","Proyec."],["ajustes","⚙️","Ajustes"]];
@@ -327,8 +340,29 @@ function renderResumen(){
       balHtml+=`<div class="row" style="margin-bottom:2px;"><span style="font-size:12px;color:#8080a0;">🤝 Préstamos (${activeLoans.length})</span><span style="font-size:15px;font-weight:700;font-family:monospace;color:#4db6ac;">${fmt(Math.abs(netLoanA))}</span></div>
       <div style="font-size:11px;color:#6060a0;margin-bottom:8px;">${loanWho} <span style="font-size:9px;">· ver pestaña Préstamos</span></div>`;
     }
-    if(hasExp){
-      balHtml+=`<button class="btn btn-green" onclick="doSettle()">✓ Saldar gastos compartidos</button>`;
+    if(Math.abs(totalNet)>1){
+      if(!showAbonoForm){
+        balHtml+=`<button class="btn" style="background:#4db6ac;color:#0a0a12;margin-top:4px;" onclick="showAbonoForm=true;abonoFrom='${totalNet>0?"B":"A"}';abonoAmt='${Math.round(Math.abs(totalNet))}';render()">💳 Registrar abono</button>`;
+      }else{
+        const effPayer=abonoFrom||(totalNet>0?"B":"A");
+        balHtml+=`<div style="background:#0a0a18;border-radius:10px;padding:12px 14px;border:1px solid #4db6ac44;margin-top:6px;">
+          <div style="font-size:10px;color:#4db6ac;font-family:monospace;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">💳 Registrar abono</div>
+          <label class="fl">¿Quién paga?</label>
+          <div class="chips" style="margin-bottom:10px;">
+            <div class="chip${effPayer==="A"?" on":""}" onclick="abonoFrom='A';render()">${d.names.A}</div>
+            <div class="chip${effPayer==="B"?" on":""}" onclick="abonoFrom='B';render()">${d.names.B}</div>
+          </div>
+          <label class="fl">Monto (COP)</label>
+          <input class="inp-big" type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(abonoAmt)}" oninput="fmtAmountInput(this,v=>abonoAmt=v)" style="font-size:20px;margin-bottom:8px;"/>
+          <button class="btn-sm" style="background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;margin-bottom:10px;padding:6px 12px;" onclick="abonoAmt=String(${Math.round(Math.abs(totalNet))});render()">Saldar todo — ${fmt(Math.abs(totalNet))}</button>
+          <label class="fl">Nota (opcional)</label>
+          <input type="text" placeholder="Ej: Nequi, por parqueadero…" value="${(abonoNote||"").replace(/"/g,"&quot;")}" oninput="abonoNote=this.value" style="margin-bottom:10px;"/>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-green" style="margin:0;flex:1;padding:11px;" onclick="doAbonoTransfer()">✓ Confirmar abono</button>
+            <button class="btn btn-dark" style="margin:0;width:48px;padding:11px;" onclick="showAbonoForm=false;abonoAmt='';abonoNote='';abonoFrom='';render()">✕</button>
+          </div>
+        </div>`;
+      }
     }
   }
   const settledHtml=(d.settled||[]).map((sl,idx)=>({sl,idx})).slice(-4).reverse().map(({sl,idx})=>`
@@ -436,11 +470,20 @@ function renderBalanceDetail(d){
     </div>`;
   }).join("");
   const moreNote=shExp.length>30?`<div style="font-size:10px;color:#4a4a6a;font-family:monospace;text-align:center;padding-top:6px;">… y ${shExp.length-30} gastos más</div>`:"";
-  const settledTotal=(d.settled||[]).reduce((s,sl)=>s+sl.amount,0);
-  const settledNote=settledTotal>0?`<div style="font-size:10px;color:#4caf80;font-family:monospace;text-align:center;padding-top:6px;">− ${fmt(settledTotal)} ya saldados se descuentan del total</div>`:"";
-  return`<div style="background:#0e0e1a;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:280px;overflow-y:auto;border:1px solid #1e1e3a;">
+  // All settlements: legacy settled[], legacy catSettled[], and new transfer entries
+  const allPayments=[
+    ...(d.settled||[]).map(s=>({date:s.date,from:nm(s.from),to:nm(s.to),amount:s.amount})),
+    ...(d.catSettled||[]).map(s=>({date:s.date,from:nm(s.from),to:nm(s.to),amount:s.amount})),
+    ...(d.entries||[]).filter(e=>e.type==="transfer").map(e=>({date:e.date,from:nm(e.paidBy||"A"),to:nm(e.paidBy==="A"?"B":"A"),amount:e.amount,note:e.description}))
+  ].sort((a,b)=>b.date.localeCompare(a.date));
+  const paymentsHtml=allPayments.length>0?`
+    <div style="border-top:1px solid #1e1e3a22;margin-top:6px;padding-top:6px;">
+      <div style="font-size:9px;color:#4db6ac;font-family:monospace;text-transform:uppercase;margin-bottom:4px;">Abonos y saldos registrados</div>
+      ${allPayments.map(p=>`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#4db6ac;font-family:monospace;">${p.date} · ${p.from}→${p.to}${p.note?(" · "+p.note):""}</span><span style="font-size:10px;color:#4db6ac;font-family:monospace;">-${fmt(p.amount)}</span></div>`).join("")}
+    </div>`:"";
+  return`<div style="background:#0e0e1a;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:300px;overflow-y:auto;border:1px solid #1e1e3a;">
     <div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin-bottom:6px;">Detalle · cada gasto y quién debe a quién</div>
-    ${rows}${moreNote}${settledNote}
+    ${rows}${moreNote}${paymentsHtml}
   </div>`;
 }
 
@@ -578,6 +621,11 @@ function entryKind(e){
     const label=src==="pareja"?"Pago de pareja":src==="otro"?"Otro ingreso":"Nómina / salario";
     return{label,emoji:"💰",color:"#4caf80",bg:"#4caf8018",bd:"#4caf8033"};
   }
+  if(e.type==="transfer"){
+    const payer=nm(e.paidBy||"A");
+    const receiver=nm(e.paidBy==="A"?"B":"A");
+    return{label:`Abono: ${payer} → ${receiver}`,emoji:"💳",color:"#4db6ac",bg:"#4db6ac18",bd:"#4db6ac33"};
+  }
   if(e.type==="debt"){
     const n=e.debtMonths||1;
     return{label:n>1?`Deuda · ${n} cuotas`:"Deuda",emoji:"🏦",color:"#ef5350",bg:"#ef535018",bd:"#ef535033"};
@@ -602,7 +650,7 @@ function renderHistorial(){
       ${[["all","Todos"],["A",d.names.A],["B",d.names.B],["shared","Compartido"]].map(([v,l])=>`<div class="chip${filterUser===v?" on":""}" onclick="filterUser='${v}';render()">${l}</div>`).join("")}
     </div>
     <div class="chips">
-      ${[["all","Todo"],["expense","Gastos"],["income","Ingresos"],["debt","Deudas"]].map(([v,l])=>`<div class="chip${filterType===v?" on":""}" onclick="filterType='${v}';render()">${l}</div>`).join("")}
+      ${[["all","Todo"],["expense","Gastos"],["income","Ingresos"],["debt","Deudas"],["transfer","Abonos"]].map(([v,l])=>`<div class="chip${filterType===v?" on":""}" onclick="filterType='${v}';render()">${l}</div>`).join("")}
     </div>
     <select style="margin-bottom:10px;" onchange="filterMonth=this.value;render()">
       <option value="all"${filterMonth==="all"?" selected":""}>Todos los meses</option>
@@ -622,16 +670,16 @@ function renderHistorial(){
           <div style="font-size:14px;margin-bottom:4px;font-weight:500;">${icon(e.category)} ${e.description}</div>
           ${e.note?`<div style="font-size:11px;color:#4a4a6a;margin-bottom:4px;font-style:italic;">${e.note}</div>`:""}
           <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
-            <span class="tag" style="background:#4a4a8a18;color:#8080c0;border:1px solid #4a4a8a33;">${e.user==="shared"?"compartido":"solo "+nm(e.user)}</span>
-            ${e.paidBy?`<span class="tag" style="background:#ff8a6518;color:#ff8a65;border:1px solid #ff8a6533;">pagó ${nm(e.paidBy)}</span>`:""}
+            ${e.type!=="transfer"?`<span class="tag" style="background:#4a4a8a18;color:#8080c0;border:1px solid #4a4a8a33;">${e.user==="shared"?"compartido":"solo "+nm(e.user)}</span>`:""}
+            ${e.type==="transfer"?`<span class="tag" style="background:#4db6ac18;color:#4db6ac;border:1px solid #4db6ac33;">${nm(e.paidBy||"A")} → ${nm(e.paidBy==="A"?"B":"A")}</span>`:(e.paidBy?`<span class="tag" style="background:#ff8a6518;color:#ff8a65;border:1px solid #ff8a6533;">pagó ${nm(e.paidBy)}</span>`:"")}
             ${e.registeredBy?`<span class="tag" style="background:#6060a018;color:#8080b0;border:1px solid #6060a033;">por ${nm(e.registeredBy)}</span>`:""}
             <span style="font-size:10px;color:#4a4a6a;font-family:monospace;">${e.date}</span>
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0;">
-          <div style="font-size:14px;font-weight:700;font-family:monospace;color:${e.type==="income"?"#4caf80":e.type==="debt"?"#ef5350":"#f0eff4"};">${e.type==="income"?"+":"-"}${fmt(e.amount)}</div>
+          <div style="font-size:14px;font-weight:700;font-family:monospace;color:${e.type==="income"?"#4caf80":e.type==="debt"?"#ef5350":e.type==="transfer"?"#4db6ac":"#f0eff4"};">${e.type==="income"?"+":e.type==="transfer"?"↔ ":"-"}${fmt(e.amount)}</div>
           <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:5px;">
-            <span style="font-size:14px;cursor:pointer;" onclick="doEditEntry('${e.id}')">✏️</span>
+            ${e.type!=="transfer"?`<span style="font-size:14px;cursor:pointer;" onclick="doEditEntry('${e.id}')">✏️</span>`:""}
             <span style="font-size:${confirmDeleteId===e.id?11:14}px;cursor:pointer;color:${confirmDeleteId===e.id?"#ef5350":"inherit"};font-family:${confirmDeleteId===e.id?"monospace":"inherit"};" onclick="doDeleteEntry('${e.id}')">${confirmDeleteId===e.id?"¿Seguro?":"🗑️"}</span>
           </div>
         </div>
@@ -1038,20 +1086,26 @@ function renderCuentas(){
         html+='</div></div>';
         html+='<div style="text-align:right;flex-shrink:0;margin-left:8px;">';
         html+='<div style="font-size:14px;font-weight:700;font-family:monospace;">'+fmtS(e.amount)+'</div>';
-        html+='<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">';
+        html+='<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;flex-wrap:wrap;">';
+        if(e.user==="shared"&&e.paidBy){
+          const owedAmt=e.paidBy==="A"?Math.round(e.amount*spB):Math.round(e.amount*spA);
+          if(owedAmt>0)html+='<span style="font-size:10px;cursor:pointer;color:#4db6ac;border:1px solid #4db6ac44;padding:2px 7px;border-radius:6px;font-family:monospace;" onclick="event.stopPropagation();doSaldarEntry('+e.id+')">💳 saldar '+fmt(owedAmt)+'</span>';
+        }
         html+='<span style="font-size:14px;cursor:pointer;" onclick="event.stopPropagation();doEditEntry('+e.id+')">✏️</span>';
         html+='<span style="font-size:'+(confirmDeleteId===e.id?11:14)+'px;cursor:pointer;color:'+(confirmDeleteId===e.id?"#ef5350":"inherit")+';font-family:monospace;" onclick="event.stopPropagation();doDeleteEntry('+e.id+')">'+(confirmDeleteId===e.id?"¿Seguro?":"🗑️")+'</span>';
         html+='</div></div>';
         html+='</div>';
       });
-      // Cat settled history
-      const catHistory=(d.catSettled||[]).filter(s=>s.cat===c.cat);
-      if(catHistory.length>0){
+      // Cat settled history: legacy catSettled[] + new transfer entries for this category
+      const catHistory=(d.catSettled||[]).filter(s=>s.cat===c.cat).map(s=>({date:s.date,paidBy:s.from,to:s.to,amount:s.amount}));
+      const catTransfers=(d.entries||[]).filter(e=>e.type==="transfer"&&e.category===c.cat).map(e=>({date:e.date,paidBy:e.paidBy,to:e.paidBy==="A"?"B":"A",amount:e.amount}));
+      const allSettled=[...catHistory,...catTransfers].sort((a,b)=>b.date.localeCompare(a.date));
+      if(allSettled.length>0){
         html+='<div style="margin-top:10px;padding-top:10px;border-top:1px solid #1e1e3a;">';
         html+='<div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">SALDOS REGISTRADOS</div>';
-        catHistory.slice().reverse().forEach(s=>{
+        allSettled.forEach(s=>{
           html+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e1e3a22;">';
-          html+='<div><div style="font-size:12px;color:#4caf80;">✓ '+nm(s.from)+' → '+nm(s.to)+'</div>';
+          html+='<div><div style="font-size:12px;color:#4caf80;">💳 '+nm(s.paidBy)+' → '+nm(s.to)+'</div>';
           html+='<div style="font-size:10px;color:#4a4a6a;font-family:monospace;">'+s.date+'</div></div>';
           html+='<div style="font-size:13px;font-weight:700;color:#4caf80;font-family:monospace;">'+fmt(s.amount)+'</div>';
           html+='</div>';
@@ -1314,10 +1368,37 @@ async function doSettle(){
   const netA=computeBalance(d);
   if(Math.abs(netA)<1){showToast("Ya están al día");return;}
   const amount=Math.abs(netA);
-  // netA>0 = B owes A, so B pays A (from=B, to=A)
-  const from=netA>0?"B":"A",to=netA>0?"A":"B";
-  await persist({...d,settled:[...(d.settled||[]),{date:today(),amount,from,to}]});
+  const payer=netA>0?"B":"A";
+  const entry={id:Date.now(),type:"transfer",user:"shared",paidBy:payer,amount,description:"Saldo total de gastos compartidos",category:"Abono",note:null,date:today(),registeredBy:payer};
+  await persist({...d,entries:[...(d.entries||[]),entry]});
   showToast("✓ Balance saldado");
+}
+
+async function doAbonoTransfer(){
+  const amt=Number(abonoAmt);
+  if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const d=D();
+  const netBal=computeBalance(d);
+  const payer=abonoFrom||(netBal>0?"B":"A");
+  const receiver=payer==="A"?"B":"A";
+  const entry={id:Date.now(),type:"transfer",user:"shared",paidBy:payer,amount:amt,description:"Abono de "+nm(payer)+" a "+nm(receiver),category:"Abono",note:abonoNote||null,date:today(),registeredBy:payer};
+  await persist({...d,entries:[...(d.entries||[]),entry]});
+  showAbonoForm=false;abonoAmt="";abonoNote="";abonoFrom="";
+  showToast("✓ Abono de "+fmt(amt)+" registrado");
+}
+
+async function doSaldarEntry(id){
+  const eid=Number(id)||id;
+  const d=D();
+  const e=(d.entries||[]).find(x=>x.id===eid);
+  if(!e||e.user!=="shared"||!e.paidBy)return;
+  const sp=d.split||{A:50,B:50};
+  const owedAmt=e.paidBy==="A"?Math.round(e.amount*sp.B/100):Math.round(e.amount*sp.A/100);
+  if(owedAmt<1){showToast("Sin imbalance que saldar");return;}
+  const payer=e.paidBy==="A"?"B":"A";
+  const entry={id:Date.now(),type:"transfer",user:"shared",paidBy:payer,amount:owedAmt,description:"Saldo: "+(e.description||e.category),category:e.category,note:null,date:today(),registeredBy:payer};
+  await persist({...d,entries:[...(d.entries||[]),entry]});
+  showToast("✓ "+fmt(owedAmt)+" saldado");
 }
 
 function doDeleteSettled(idx){
@@ -1471,8 +1552,10 @@ function doSaldarCatByIdx(idx,amt,from,to){
 function doSaldarFromBtn(btn){const cat=decodeURIComponent(btn.dataset.cat||"");const amt=parseFloat(btn.dataset.am);const from=btn.dataset.fr;const to=btn.dataset.to;if(cat)doSaldarCategoria(cat,amt,from,to);}
 async function doSaldarCategoria(cat,amt,from,to){
   const d=D();
-  const record={id:Date.now(),date:today(),cat,amount:amt,from,to,note:"Saldo de categoría: "+cat};
-  await persist({...d,catSettled:[...(d.catSettled||[]),record]});
+  // Save ONLY as transfer entry (affects computeBalance + shows in Historial).
+  // catSettled is only kept for legacy records; new settlements go to entries[].
+  const transferEntry={id:Date.now(),type:"transfer",user:"shared",paidBy:from,amount:amt,description:"Saldo: "+cat,category:cat,note:"Saldo de categoría: "+cat,date:today(),registeredBy:from};
+  await persist({...d,entries:[...(d.entries||[]),transferEntry]});
   showToast("✓ Saldo registrado en "+cat);
 }
 
