@@ -202,14 +202,15 @@ function computeBalance(d){
 
 // ── State ──────────────────────────────────────────────────────────────────
 let tab="resumen";
-let filterUser="all",filterType="all",filterMonth="all",searchQ="";
+let filterUser=localStorage.getItem("hist_filterUser")||"all";
+let filterType=localStorage.getItem("hist_filterType")||"all";
+let filterMonth="all";
+let searchQ=localStorage.getItem("hist_searchQ")||"";
 let settingsTab="names";
 let chartUser="all",chartMonth=thisMonth();
 let showNewLoan=false;
 let editId=null;
-let confirmDeleteId=null;
-let confirmDeleteLoanId=null;
-let confirmDeleteSettledIdx=null;
+let confirmDelete=null; // {type:"entry"|"loan"|"settled", id}
 let payAmounts={};
 let showBalDetail=false;
 let formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina"};
@@ -274,45 +275,12 @@ function render(){
 }
 
 // ── Resumen ────────────────────────────────────────────────────────────────
-function renderResumen(){
-  const d=D();
-  // New entries notification
-  const currentCount=(d.entries||[]).length;
-  const newCount=currentCount-lastSeenCount;
+function renderBalanceCard(d){
   const sp=d.split||{A:50,B:50};
-  const spA=sp.A/100,spB=sp.B/100;
   const netBal=computeBalance(d);
-  const balA=netBal,balB=-netBal;
-  const tm=thisMonth();
-  const me=(d.entries||[]).filter(e=>e.date&&e.date.startsWith(tm));
-  const tS=me.filter(e=>e.type==="expense"&&e.user==="shared").reduce((s,e)=>s+e.amount,0);
-  const tA=me.filter(e=>e.type==="expense"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
-  const tB=me.filter(e=>e.type==="expense"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
-  const iA=me.filter(e=>e.type==="income"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
-  const iB=me.filter(e=>e.type==="income"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
-  const debts=(d.entries||[]).filter(e=>e.type==="debt");
-  const dS=debts.filter(e=>e.user==="shared").reduce((s,e)=>s+e.amount,0);
-  const dA=debts.filter(e=>e.user==="A").reduce((s,e)=>s+e.amount,0);
-  const dB=debts.filter(e=>e.user==="B").reduce((s,e)=>s+e.amount,0);
-  const wa=new Date();wa.setDate(wa.getDate()-7);
-  const ws=wa.toISOString().slice(0,10);
-  const wk=(d.entries||[]).filter(e=>e.date>=ws&&e.type==="expense");
-  const wt=wk.reduce((s,e)=>s+e.amount,0);
-  const wsh=wk.filter(e=>e.user==="shared").reduce((s,e)=>s+e.amount,0);
-
-  // Loans: netLoanA > 0 means B owes A (A lent to B)
+  const balA=netBal;
   const activeLoans=(d.loans||[]).filter(l=>l.status==="active");
-  const netLoanA=activeLoans.reduce((s,l)=>{
-    const rem=l.amount-l.paid;
-    return l.from==="A"?s+rem:s-rem;
-  },0);
-
-  const budgets=d.budgets||{};
-  const alerts=Object.entries(budgets).map(([cat,lim])=>{
-    const sp2=me.filter(e=>e.type==="expense"&&e.category===cat).reduce((s,e)=>s+e.amount,0);
-    return{cat,lim,sp2,pct:sp2/lim*100};
-  }).filter(b=>b.pct>=70).sort((a,b)=>b.pct-a.pct);
-
+  const netLoanA=activeLoans.reduce((s,l)=>{const rem=l.amount-l.paid;return l.from==="A"?s+rem:s-rem;},0);
   const totalNet=balA+netLoanA;
   let balHtml="";
   if(Math.abs(balA)<1&&Math.abs(netLoanA)<1){
@@ -323,7 +291,6 @@ function renderResumen(){
     const totalWho=totalNet<0?`${d.names.A} le debe a ${d.names.B}`:`${d.names.B} le debe a ${d.names.A}`;
     const hasExp=Math.abs(balA)>1,hasLoan=Math.abs(netLoanA)>1;
     balHtml=``;
-    // Headline: the combined total of who-owes-whom
     if(Math.abs(totalNet)<1){
       balHtml+=`<div class="big" style="font-size:22px;color:#4caf80;">≈ $0</div>
       <div class="lbl" style="margin:4px 0 12px;">Gastos y préstamos se compensan entre sí</div>
@@ -340,7 +307,7 @@ function renderResumen(){
     }
     if(hasLoan){
       balHtml+=`<div class="row" style="margin-bottom:2px;"><span style="font-size:12px;color:#8080a0;">🤝 Préstamos (${activeLoans.length})</span><span style="font-size:15px;font-weight:700;font-family:monospace;color:#4db6ac;">${fmt(Math.abs(netLoanA))}</span></div>
-      <div style="font-size:11px;color:#6060a0;margin-bottom:8px;">${loanWho} <span style="font-size:9px;">· ver pestaña Préstamos</span></div>`;
+      <div style="font-size:11px;color:#6060a0;margin-bottom:8px;">${loanWho} <span style="font-size:9px;">· ver Config → Préstamos</span></div>`;
     }
     if(Math.abs(totalNet)>1){
       if(!showAbonoForm){
@@ -372,9 +339,77 @@ function renderResumen(){
       <span style="font-size:11px;color:#4a4a6a;font-family:monospace;">${sl.date} · ${nm(sl.from)}→${nm(sl.to)}</span>
       <span style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:11px;color:#4caf80;font-family:monospace;">${fmt(sl.amount)}</span>
-        <span style="cursor:pointer;font-size:11px;font-family:monospace;color:${confirmDeleteSettledIdx===idx?"#ef5350":"#4a4a6a"};" onclick="doDeleteSettled(${idx})">${confirmDeleteSettledIdx===idx?"¿borrar?":"🗑️"}</span>
+        <span style="cursor:pointer;font-size:11px;font-family:monospace;color:${confirmDelete&&confirmDelete.type==="settled"&&confirmDelete.id===idx?"#ef5350":"#4a4a6a"};" onclick="doDeleteSettled(${idx})">${confirmDelete&&confirmDelete.type==="settled"&&confirmDelete.id===idx?"¿borrar?":"🗑️"}</span>
       </span>
     </div>`).join("");
+  const sp2=d.split||{A:50,B:50};
+  return`<div class="card card-gold">
+    <div class="ct">Balance equitativo · ${sp2.A}/${sp2.B}</div>
+    ${balHtml}
+    ${settledHtml?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2040;"><div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin-bottom:6px;">Saldos registrados · toca 🗑️ para corregir</div>${settledHtml}</div>`:""}
+  </div>`;
+}
+
+function renderThisMonthCard(d){
+  const sp=d.split||{A:50,B:50};
+  const spA=sp.A/100,spB=sp.B/100;
+  const tm=thisMonth();
+  const me=(d.entries||[]).filter(e=>e.date&&e.date.startsWith(tm));
+  const tS=me.filter(e=>e.type==="expense"&&e.user==="shared").reduce((s,e)=>s+e.amount,0);
+  const tA=me.filter(e=>e.type==="expense"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
+  const tB=me.filter(e=>e.type==="expense"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
+  const iA=me.filter(e=>e.type==="income"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
+  const iB=me.filter(e=>e.type==="income"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
+  return`<div class="card">
+    <div class="ct">Este mes — ${tm} · ¿cuánto pone cada uno?</div>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr>
+        <th style="text-align:left;font-size:10px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;padding-bottom:8px;"></th>
+        <th style="text-align:right;font-size:12px;color:#64b5f6;font-weight:700;padding-bottom:8px;">${d.names.A}</th>
+        <th style="text-align:right;font-size:12px;color:#ff8a65;font-weight:700;padding-bottom:8px;">${d.names.B}</th>
+      </tr></thead>
+      <tbody style="font-family:monospace;">
+        <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">💰 Ingresos</td><td style="text-align:right;font-size:13px;color:#4caf80;">${fmt(iA)}</td><td style="text-align:right;font-size:13px;color:#4caf80;">${fmt(iB)}</td></tr>
+        <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">💸 Gastos personales</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tA)}</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tB)}</td></tr>
+        <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">🤝 Aporte compartido</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tS*spA)}<span style="font-size:9px;color:#4a4a6a;"> ${sp.A}%</span></td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tS*spB)}<span style="font-size:9px;color:#4a4a6a;"> ${sp.B}%</span></td></tr>
+        <tr style="border-top:1px solid #2a2040;"><td style="font-size:12px;color:#f0eff4;font-weight:600;padding:6px 0 4px;">Total a cubrir</td><td style="text-align:right;font-size:13px;color:#f0eff4;font-weight:700;padding-top:6px;">${fmt(tA+tS*spA)}</td><td style="text-align:right;font-size:13px;color:#f0eff4;font-weight:700;padding-top:6px;">${fmt(tB+tS*spB)}</td></tr>
+        <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">Disponible</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iA-tA-tS*spA)>=0?"#4caf80":"#ef5350"};">${fmt(iA-tA-tS*spA)}</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iB-tB-tS*spB)>=0?"#4caf80":"#ef5350"};">${fmt(iB-tB-tS*spB)}</td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e3a;font-size:11px;color:#6060a0;font-family:monospace;display:flex;justify-content:space-between;"><span>Gasto compartido del mes</span><span style="color:#c9a227;font-weight:600;">${fmt(tS)}</span></div>
+  </div>`;
+}
+
+function renderWeekCard(d){
+  const wa=new Date();wa.setDate(wa.getDate()-7);
+  const ws=wa.toISOString().slice(0,10);
+  const wk=(d.entries||[]).filter(e=>e.date>=ws&&e.type==="expense");
+  const wt=wk.reduce((s,e)=>s+e.amount,0);
+  const wsh=wk.filter(e=>e.user==="shared").reduce((s,e)=>s+e.amount,0);
+  return`<div class="card card-blue">
+    <div class="ct">Últimos 7 días</div>
+    <div style="display:flex;justify-content:space-around;">
+      <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">TOTAL</div><div style="font-size:16px;font-weight:700;color:#4db6ac;">${fmtS(wt)}</div></div>
+      <div style="width:1px;background:#1e1e3a;"></div>
+      <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">COMPARTIDO</div><div style="font-size:16px;font-weight:700;color:#c9a227;">${fmtS(wsh)}</div></div>
+      <div style="width:1px;background:#1e1e3a;"></div>
+      <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">REGISTROS</div><div style="font-size:16px;font-weight:700;color:#f0eff4;">${wk.length}</div></div>
+    </div>
+  </div>`;
+}
+
+function renderResumen(){
+  const d=D();
+  const currentCount=(d.entries||[]).length;
+  const newCount=currentCount-lastSeenCount;
+  const tm=thisMonth();
+  const me=(d.entries||[]).filter(e=>e.date&&e.date.startsWith(tm));
+  const debts=(d.entries||[]).filter(e=>e.type==="debt");
+  const budgets=d.budgets||{};
+  const alerts=Object.entries(budgets).map(([cat,lim])=>{
+    const sp2=me.filter(e=>e.type==="expense"&&e.category===cat).reduce((s,e)=>s+e.amount,0);
+    return{cat,lim,sp2,pct:sp2/lim*100};
+  }).filter(b=>b.pct>=70).sort((a,b)=>b.pct-a.pct);
 
   const alertsHtml=alerts.length>0?`
     <div class="card card-warn">
@@ -400,7 +435,6 @@ function renderResumen(){
         </div>`;}).join("")}
     </div>`:"";
 
-  // Mark as seen
   const notifHtml=newCount>0&&lastSeenCount>0?`
     <div style="background:#1a1f2e;border:1px solid #64b5f644;border-radius:12px;padding:12px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;" onclick="dismissNotif()">
       <div>
@@ -412,39 +446,9 @@ function renderResumen(){
 
   return`<div class="sec">
     ${notifHtml}
-    <div class="card card-gold">
-      <div class="ct">Balance equitativo · ${sp.A}/${sp.B}</div>
-      ${balHtml}
-      ${settledHtml?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2040;"><div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin-bottom:6px;">Saldos registrados · toca 🗑️ para corregir</div>${settledHtml}</div>`:""}
-    </div>
-    <div class="card">
-      <div class="ct">Este mes — ${tm} · ¿cuánto pone cada uno?</div>
-      <table style="width:100%;border-collapse:collapse;">
-        <thead><tr>
-          <th style="text-align:left;font-size:10px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;padding-bottom:8px;"></th>
-          <th style="text-align:right;font-size:12px;color:#64b5f6;font-weight:700;padding-bottom:8px;">${d.names.A}</th>
-          <th style="text-align:right;font-size:12px;color:#ff8a65;font-weight:700;padding-bottom:8px;">${d.names.B}</th>
-        </tr></thead>
-        <tbody style="font-family:monospace;">
-          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">💰 Ingresos</td><td style="text-align:right;font-size:13px;color:#4caf80;">${fmt(iA)}</td><td style="text-align:right;font-size:13px;color:#4caf80;">${fmt(iB)}</td></tr>
-          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">💸 Gastos personales</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tA)}</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tB)}</td></tr>
-          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">🤝 Aporte compartido</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tS*spA)}<span style="font-size:9px;color:#4a4a6a;"> ${sp.A}%</span></td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tS*spB)}<span style="font-size:9px;color:#4a4a6a;"> ${sp.B}%</span></td></tr>
-          <tr style="border-top:1px solid #2a2040;"><td style="font-size:12px;color:#f0eff4;font-weight:600;padding:6px 0 4px;">Total a cubrir</td><td style="text-align:right;font-size:13px;color:#f0eff4;font-weight:700;padding-top:6px;">${fmt(tA+tS*spA)}</td><td style="text-align:right;font-size:13px;color:#f0eff4;font-weight:700;padding-top:6px;">${fmt(tB+tS*spB)}</td></tr>
-          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">Disponible</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iA-tA-tS*spA)>=0?"#4caf80":"#ef5350"};">${fmt(iA-tA-tS*spA)}</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iB-tB-tS*spB)>=0?"#4caf80":"#ef5350"};">${fmt(iB-tB-tS*spB)}</td></tr>
-        </tbody>
-      </table>
-      <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e3a;font-size:11px;color:#6060a0;font-family:monospace;display:flex;justify-content:space-between;"><span>Gasto compartido del mes</span><span style="color:#c9a227;font-weight:600;">${fmt(tS)}</span></div>
-    </div>
-    <div class="card card-blue">
-      <div class="ct">Últimos 7 días</div>
-      <div style="display:flex;justify-content:space-around;">
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">TOTAL</div><div style="font-size:16px;font-weight:700;color:#4db6ac;">${fmtS(wt)}</div></div>
-        <div style="width:1px;background:#1e1e3a;"></div>
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">COMPARTIDO</div><div style="font-size:16px;font-weight:700;color:#c9a227;">${fmtS(wsh)}</div></div>
-        <div style="width:1px;background:#1e1e3a;"></div>
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">REGISTROS</div><div style="font-size:16px;font-weight:700;color:#f0eff4;">${wk.length}</div></div>
-      </div>
-    </div>
+    ${renderBalanceCard(d)}
+    ${renderThisMonthCard(d)}
+    ${renderWeekCard(d)}
     ${alertsHtml}
     ${debts.length>0?renderDebtsCard(debts,d):""}
     ${goalsHtml}
@@ -598,7 +602,7 @@ function renderAgregar(){
       <button class="btn" onclick="doSaveEntry()" ${saving?"disabled":""}>
         ${saving?"Guardando…":editId?"💾 Guardar cambios":"＋ Agregar"}
       </button>
-      ${editId?`<button class="btn btn-dark" onclick="editId=null;setTab('historial')">Cancelar</button>`:""}
+      ${editId?`<button class="btn btn-dark" onclick="editId=null;setTab('movimientos')">Cancelar</button>`:""}
     </div>
     ${(D().recurring||[]).length>0?`<div class="card">
       <div class="ct">Recurrentes — toca para agregar hoy</div>
@@ -637,6 +641,9 @@ function entryKind(e){
 }
 
 function renderHistorial(){
+  localStorage.setItem("hist_filterUser",filterUser);
+  localStorage.setItem("hist_filterType",filterType);
+  localStorage.setItem("hist_searchQ",searchQ);
   const d=D();
   const allMonths=[...new Set((d.entries||[]).map(e=>e.date&&e.date.slice(0,7)).filter(Boolean))].sort().reverse();
   let list=[...(d.entries||[])].reverse().filter(e=>{
@@ -682,7 +689,7 @@ function renderHistorial(){
           <div style="font-size:14px;font-weight:700;font-family:monospace;color:${e.type==="income"?"#4caf80":e.type==="debt"?"#ef5350":e.type==="transfer"?"#4db6ac":"#f0eff4"};">${e.type==="income"?"+":e.type==="transfer"?"↔ ":"-"}${fmt(e.amount)}</div>
           <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:5px;">
             ${e.type!=="transfer"?`<span style="font-size:14px;cursor:pointer;" onclick="doEditEntry('${e.id}')">✏️</span>`:""}
-            <span style="font-size:${confirmDeleteId===e.id?11:14}px;cursor:pointer;color:${confirmDeleteId===e.id?"#ef5350":"inherit"};font-family:${confirmDeleteId===e.id?"monospace":"inherit"};" onclick="doDeleteEntry('${e.id}')">${confirmDeleteId===e.id?"¿Seguro?":"🗑️"}</span>
+            <span style="font-size:${confirmDelete&&confirmDelete.type==="entry"&&confirmDelete.id===e.id?11:14}px;cursor:pointer;color:${confirmDelete&&confirmDelete.type==="entry"&&confirmDelete.id===e.id?"#ef5350":"inherit"};font-family:${confirmDelete&&confirmDelete.type==="entry"&&confirmDelete.id===e.id?"monospace":"inherit"};" onclick="doDeleteEntry('${e.id}')">${confirmDelete&&confirmDelete.type==="entry"&&confirmDelete.id===e.id?"¿Seguro?":"🗑️"}</span>
           </div>
         </div>
       </div>`}).join("")}
@@ -945,7 +952,7 @@ function renderPrestamos(){
           ${(loan.payments||[]).slice().reverse().map(p=>`<div class="row" style="margin-bottom:4px;"><span style="font-size:11px;color:#6060a0;font-family:monospace;">${p.date}</span><span style="font-size:11px;color:#4caf80;font-family:monospace;">+${fmt(p.amount)}</span></div>`).join("")}
         </div>`:""}
         <div style="margin-top:10px;text-align:right;">
-          <span style="font-size:11px;cursor:pointer;color:${confirmDeleteLoanId===loan.id?"#ef5350":"#4a4a6a"};font-family:monospace;" onclick="doDeleteLoan('${loan.id}')">${confirmDeleteLoanId===loan.id?"¿Eliminar? Toca de nuevo":"🗑️ eliminar"}</span>
+          <span style="font-size:11px;cursor:pointer;color:${confirmDelete&&confirmDelete.type==="loan"&&confirmDelete.id===loan.id?"#ef5350":"#4a4a6a"};font-family:monospace;" onclick="doDeleteLoan('${loan.id}')">${confirmDelete&&confirmDelete.type==="loan"&&confirmDelete.id===loan.id?"¿Eliminar? Toca de nuevo":"🗑️ eliminar"}</span>
         </div>
       </div>`;}).join("")}
     ${settled.length>0?`<div class="card">
@@ -1113,7 +1120,7 @@ function renderCuentas(){
           if(owedAmt>0)html+='<span style="font-size:10px;cursor:pointer;color:#4db6ac;border:1px solid #4db6ac44;padding:2px 7px;border-radius:6px;font-family:monospace;" onclick="event.stopPropagation();doSaldarEntry('+e.id+')">💳 saldar '+fmt(owedAmt)+'</span>';
         }
         html+='<span style="font-size:14px;cursor:pointer;" onclick="event.stopPropagation();doEditEntry('+e.id+')">✏️</span>';
-        html+='<span style="font-size:'+(confirmDeleteId===e.id?11:14)+'px;cursor:pointer;color:'+(confirmDeleteId===e.id?"#ef5350":"inherit")+';font-family:monospace;" onclick="event.stopPropagation();doDeleteEntry('+e.id+')">'+(confirmDeleteId===e.id?"¿Seguro?":"🗑️")+'</span>';
+        html+='<span style="font-size:'+(confirmDelete&&confirmDelete.type==="entry"&&confirmDelete.id===e.id?11:14)+'px;cursor:pointer;color:'+(confirmDelete&&confirmDelete.type==="entry"&&confirmDelete.id===e.id?"#ef5350":"inherit")+';font-family:monospace;" onclick="event.stopPropagation();doDeleteEntry('+e.id+')">'+(confirmDelete&&confirmDelete.type==="entry"&&confirmDelete.id===e.id?"¿Seguro?":"🗑️")+'</span>';
         html+='</div></div>';
         html+='</div>';
       });
@@ -1377,8 +1384,8 @@ function doEditEntry(id){
 
 function doDeleteEntry(id){
   const rid=Number(id)||id;
-  if(confirmDeleteId!==rid){confirmDeleteId=rid;setTimeout(()=>{confirmDeleteId=null;render();},3000);render();return;}
-  confirmDeleteId=null;
+  if(!confirmDelete||confirmDelete.type!=="entry"||confirmDelete.id!==rid){confirmDelete={type:"entry",id:rid};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
+  confirmDelete=null;
   const d=D();
   persist({...d,entries:(d.entries||[]).filter(x=>x.id!==rid)});
   showToast("✓ Eliminado");
@@ -1424,8 +1431,8 @@ async function doSaldarEntry(id){
 
 function doDeleteSettled(idx){
   const i=Number(idx);
-  if(confirmDeleteSettledIdx!==i){confirmDeleteSettledIdx=i;setTimeout(()=>{confirmDeleteSettledIdx=null;render();},3000);render();return;}
-  confirmDeleteSettledIdx=null;
+  if(!confirmDelete||confirmDelete.type!=="settled"||confirmDelete.id!==i){confirmDelete={type:"settled",id:i};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
+  confirmDelete=null;
   const d=D();
   persist({...d,settled:(d.settled||[]).filter((_,j)=>j!==i)});
   showToast("✓ Saldo eliminado");
@@ -1476,8 +1483,8 @@ function doLoanPayCustom(id,maxAmt){
 
 function doDeleteLoan(id){
   const lid=Number(id)||id;
-  if(confirmDeleteLoanId!==lid){confirmDeleteLoanId=lid;setTimeout(()=>{confirmDeleteLoanId=null;render();},3000);render();return;}
-  confirmDeleteLoanId=null;
+  if(!confirmDelete||confirmDelete.type!=="loan"||confirmDelete.id!==lid){confirmDelete={type:"loan",id:lid};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
+  confirmDelete=null;
   const d=D();
   persist({...d,loans:(d.loans||[]).filter(l=>l.id!==lid)});
   showToast("✓ Eliminado");
