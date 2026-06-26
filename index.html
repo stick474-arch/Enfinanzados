@@ -500,9 +500,23 @@ function renderBalanceDetail(d){
       <div style="font-size:9px;color:#4db6ac;font-family:monospace;text-transform:uppercase;margin-bottom:4px;">Abonos y saldos registrados</div>
       ${allPayments.map(p=>`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#4db6ac;font-family:monospace;">${p.date} · ${p.from}→${p.to}${p.note?(" · "+p.note):""}</span><span style="font-size:10px;color:#4db6ac;font-family:monospace;">-${fmt(p.amount)}</span></div>`).join("")}
     </div>`:"";
+  // Viaje contributions — so user can see which trips feed into the shared balance
+  const viajeBkd=(d.viajes||[]).map(v=>{
+    const vIds=v.entries||[];
+    const vE=(d.entries||[]).filter(e=>e.type==="expense"&&(vIds.includes(e.id)||vIds.includes(Number(e.id))));
+    const shT=vE.filter(e=>e.user==="shared").reduce((s,e)=>s+e.amount,0);
+    const pA=vE.filter(e=>e.user==="shared"&&e.paidBy==="A").reduce((s,e)=>s+e.amount,0);
+    const vBalA=pA-(shT*spA);
+    return shT>0?{name:v.name,vBalA}:null;
+  }).filter(Boolean);
+  const viajeHtml=viajeBkd.length>0?`
+    <div style="border-top:1px solid #1e1e3a22;margin-top:6px;padding-top:6px;">
+      <div style="font-size:9px;color:#c9a227;font-family:monospace;text-transform:uppercase;margin-bottom:4px;">✈️ Contribución por viaje (incluidos arriba)</div>
+      ${viajeBkd.map(x=>{const who=x.vBalA>0?(d.names.B+" debe a "+d.names.A):(d.names.A+" debe a "+d.names.B);return`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#c9a227;font-family:monospace;">✈️ ${x.name} · ${who}</span><span style="font-size:10px;color:#c9a227;font-family:monospace;">${fmt(Math.abs(x.vBalA))}</span></div>`;}).join("")}
+    </div>`:"";
   return`<div style="background:#0e0e1a;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:300px;overflow-y:auto;border:1px solid #1e1e3a;">
     <div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin-bottom:6px;">Detalle · cada gasto y quién debe a quién</div>
-    ${rows}${moreNote}${paymentsHtml}
+    ${rows}${moreNote}${paymentsHtml}${viajeHtml}
   </div>`;
 }
 
@@ -645,6 +659,9 @@ function entryKind(e){
     const receiver=nm(e.paidBy==="A"?"B":"A");
     return{label:`Abono: ${payer} → ${receiver}`,emoji:"💳",color:"#4db6ac",bg:"#4db6ac18",bd:"#4db6ac33"};
   }
+  if(e.type==="loan_payment"){
+    return{label:`Pago préstamo`,emoji:"🤝",color:"#64b5f6",bg:"#64b5f618",bd:"#64b5f633"};
+  }
   if(e.type==="debt"){
     const n=e.debtMonths||1;
     return{label:n>1?`Deuda · ${n} cuotas`:"Deuda",emoji:"🏦",color:"#ef5350",bg:"#ef535018",bd:"#ef535033"};
@@ -784,9 +801,11 @@ function renderViajes(){
         const col=balA>0?"#4caf80":"#c9a227";
         const bg=balA>0?"#1e2d1e":"#1a1510";
         const br=balA>0?"#4caf8044":"#c9a22744";
-        html+="<div style=\"background:"+bg+";border:1px solid "+br+";border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;\">";
+        html+="<div style=\"background:"+bg+";border:1px solid "+br+";border-radius:10px;padding:10px 12px;\">";
+        html+="<div style=\"display:flex;justify-content:space-between;align-items:center;\">";
         html+="<span style=\"font-size:13px;color:"+col+";\">"+(who)+"</span>";
         html+="<span style=\"font-size:18px;font-weight:700;color:"+col+";font-family:monospace;\">"+fmt(Math.abs(balA))+"</span></div>";
+        html+="<div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:5px;\">💡 Ya incluido en gastos compartidos de Inicio · toca ▾ para ver detalle</div></div>";
       }else{
         html+="<div style=\"font-size:13px;color:#4caf80;text-align:center;padding:6px;\">✅ Al día en este viaje</div>";
       }
@@ -1486,7 +1505,8 @@ async function doLoanPay(id,amt){
   if(pay<=0){showToast("⚠️ Ingresa un monto válido");return;}
   const newPaid=(loan.paid||0)+pay;
   const nl=(d.loans||[]).map(l=>l.id===lid?{...l,paid:newPaid,payments:[...(l.payments||[]),{date:today(),amount:pay}],status:newPaid>=loan.amount?"settled":"active"}:l);
-  await persist({...d,loans:nl});
+  const payEntry={id:Date.now(),type:"loan_payment",user:loan.to,category:"Préstamos",description:"Pago: "+loan.description,amount:pay,paidBy:loan.to,note:null,date:today(),registeredBy:loan.to,loanId:loan.id};
+  await persist({...d,loans:nl,entries:[...(d.entries||[]),payEntry]});
   showToast(newPaid>=loan.amount?"🎉 Préstamo saldado":"✓ Pago registrado");
 }
 
@@ -1693,6 +1713,33 @@ async function doQuickPayDebt(id){
     showToast(`✓ ${fmtS(totalPaid)} registrado — ${owes} debe ${fmtS(Math.abs(Math.round(netA)))} a ${owed}`);
   }else{
     showToast(`✓ Cuota ${fmtS(amtA>0?amtA:amtB)} registrada`);
+  }
+}
+
+async function doPayCuotaFromProj(recId,amtA,amtB){
+  const rid=Number(recId)||recId;
+  const d=D();
+  const r=(d.recurring||[]).find(x=>x.id===rid);
+  if(!r)return;
+  const sp=d.split||{A:50,B:50};
+  const newEntries=[];
+  if(r.user==="shared"){
+    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:"shared",category:r.category,description:"Cuota "+r.description,amount:amtA,paidBy:"A",note:null,isRecurring:false,registeredBy:"A"});
+    if(amtB>0)newEntries.push({id:Date.now()+1,date:today(),type:"expense",user:"shared",category:r.category,description:"Cuota "+r.description,amount:amtB,paidBy:"B",note:null,isRecurring:false,registeredBy:"B"});
+  }else{
+    const amt=amtA||amtB;
+    if(amt>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:r.user,category:r.category,description:"Cuota "+r.description,amount:amt,paidBy:null,note:null,isRecurring:false,registeredBy:r.user});
+  }
+  if(newEntries.length===0){showToast("⚠️ Montos son cero");return;}
+  await persist({...d,entries:[...(d.entries||[]),...newEntries]});
+  const total=amtA+amtB;
+  if(r.user==="shared"&&Math.abs(amtA-total*(sp.A/100))>1){
+    const netA=amtA-total*(sp.A/100);
+    const owes=netA>0?d.names.B:d.names.A;
+    const owed=netA>0?d.names.A:d.names.B;
+    showToast(`✓ ${fmt(total)} — ${owes} debe ${fmt(Math.abs(Math.round(netA)))} a ${owed}`);
+  }else{
+    showToast(`✓ Cuota ${fmt(total)} registrada`);
   }
 }
 
@@ -1956,6 +2003,7 @@ function renderProyeccion(){
           return`<div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #1e1e3a22;">
             <span style="font-size:11px;color:#6060a0;font-family:monospace;min-width:54px;">${p.key}</span>
             <span style="flex:1;font-size:12px;font-family:monospace;color:${s.isOv?"#c9a227":"#f0eff4"};"><span style="color:#64b5f6;">${d.names.A}:</span> ${fmt(s.a)} &nbsp;<span style="color:#ff8a65;">${d.names.B}:</span> ${fmt(s.b)}</span>
+            ${isDebt?`<button class="btn-sm" style="background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;font-size:11px;" onclick="event.stopPropagation();doPayCuotaFromProj(${r.id},${s.a},${s.b})">💳</button>`:""}
             <button class="btn-sm btn-dark" onclick="event.stopPropagation();doStartOverrideEdit(${r.id},'${p.key}',${s.a},${s.b},1)">✏️</button>
             ${s.isOv?`<button class="btn-sm" style="background:#1e1e3a;color:#ef5350;border:1px solid #ef535033;" onclick="event.stopPropagation();doClearOverride(${r.id},'${p.key}')">✕</button>`:""}
           </div>`;
@@ -1963,6 +2011,7 @@ function renderProyeccion(){
         return`<div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #1e1e3a22;">
           <span style="font-size:11px;color:#6060a0;font-family:monospace;min-width:64px;">${p.key}</span>
           <span style="flex:1;font-size:13px;font-family:monospace;color:${s.isOv?"#c9a227":"#f0eff4"};">${fmt(s.total)}</span>
+          ${isDebt?`<button class="btn-sm" style="background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;font-size:11px;" onclick="event.stopPropagation();doPayCuotaFromProj(${r.id},${s.total},0)">💳</button>`:""}
           <button class="btn-sm btn-dark" onclick="event.stopPropagation();doStartOverrideEdit(${r.id},'${p.key}',${s.total},0,0)">✏️</button>
           ${s.isOv?`<button class="btn-sm" style="background:#1e1e3a;color:#ef5350;border:1px solid #ef535033;" onclick="event.stopPropagation();doClearOverride(${r.id},'${p.key}')">✕</button>`:""}
         </div>`;
