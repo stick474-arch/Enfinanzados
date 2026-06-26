@@ -205,7 +205,7 @@ let tab="resumen";
 let filterUser=localStorage.getItem("hist_filterUser")||"all";
 let filterType=localStorage.getItem("hist_filterType")||"all";
 let filterMonth="all";
-let searchQ=localStorage.getItem("hist_searchQ")||"";
+let searchQ="";
 let settingsTab="names";
 let chartUser="all",chartMonth=thisMonth();
 let showNewLoan=false;
@@ -354,12 +354,22 @@ function renderThisMonthCard(d){
   const sp=d.split||{A:50,B:50};
   const spA=sp.A/100,spB=sp.B/100;
   const tm=thisMonth();
+  const [ty,tmn]=tm.split("-").map(Number);
+  const pm=tmn===1?`${ty-1}-12`:`${ty}-${String(tmn-1).padStart(2,"0")}`;
   const me=(d.entries||[]).filter(e=>e.date&&e.date.startsWith(tm));
+  const pe=(d.entries||[]).filter(e=>e.date&&e.date.startsWith(pm));
   const tS=me.filter(e=>e.type==="expense"&&e.user==="shared").reduce((s,e)=>s+e.amount,0);
   const tA=me.filter(e=>e.type==="expense"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
   const tB=me.filter(e=>e.type==="expense"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
   const iA=me.filter(e=>e.type==="income"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
   const iB=me.filter(e=>e.type==="income"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
+  const pTotal=pe.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+  const cTotal=tS+tA+tB;
+  const deltaHtml=pTotal>0?(()=>{
+    const pct=Math.round((cTotal-pTotal)/pTotal*100);
+    const up=pct>=0;
+    return`<span style="font-size:10px;color:${up?"#ef5350":"#4caf80"};font-family:monospace;margin-left:6px;">${up?"▲":"▼"} ${Math.abs(pct)}% vs ${pm}</span>`;
+  })():"";
   return`<div class="card">
     <div class="ct">Este mes — ${tm} · ¿cuánto pone cada uno?</div>
     <table style="width:100%;border-collapse:collapse;">
@@ -376,7 +386,7 @@ function renderThisMonthCard(d){
         <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">Disponible</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iA-tA-tS*spA)>=0?"#4caf80":"#ef5350"};">${fmt(iA-tA-tS*spA)}</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iB-tB-tS*spB)>=0?"#4caf80":"#ef5350"};">${fmt(iB-tB-tS*spB)}</td></tr>
       </tbody>
     </table>
-    <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e3a;font-size:11px;color:#6060a0;font-family:monospace;display:flex;justify-content:space-between;"><span>Gasto compartido del mes</span><span style="color:#c9a227;font-weight:600;">${fmt(tS)}</span></div>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e3a;font-size:11px;color:#6060a0;font-family:monospace;display:flex;justify-content:space-between;align-items:center;"><span>Gasto compartido del mes</span><span style="color:#c9a227;font-weight:600;">${fmt(tS)}${deltaHtml}</span></div>
   </div>`;
 }
 
@@ -413,7 +423,10 @@ function renderResumen(){
 
   const alertsHtml=alerts.length>0?`
     <div class="card card-warn">
-      <div class="ct" style="color:#c9a227;">⚠️ Alertas de presupuesto</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="ct" style="color:#c9a227;margin-bottom:0;">⚠️ Alertas de presupuesto</div>
+        <span style="font-size:10px;color:#c9a227;cursor:pointer;font-family:monospace;border:1px solid #c9a22744;padding:3px 8px;border-radius:6px;" onclick="settingsTab='budgets';configTab='ajustes';tab='config';render()">editar límites →</span>
+      </div>
       ${alerts.map(b=>`
         <div style="margin-bottom:10px;">
           <div class="row"><span style="font-size:13px;">${icon(b.cat)} ${b.cat}</span><span style="font-size:12px;color:${b.pct>=100?"#ef5350":"#c9a227"};font-family:monospace;font-weight:600;">${Math.round(b.pct)}%${b.pct>=100?" ⚠️":""}</span></div>
@@ -643,7 +656,6 @@ function entryKind(e){
 function renderHistorial(){
   localStorage.setItem("hist_filterUser",filterUser);
   localStorage.setItem("hist_filterType",filterType);
-  localStorage.setItem("hist_searchQ",searchQ);
   const d=D();
   const allMonths=[...new Set((d.entries||[]).map(e=>e.date&&e.date.slice(0,7)).filter(Boolean))].sort().reverse();
   let list=[...(d.entries||[])].reverse().filter(e=>{
@@ -721,7 +733,12 @@ function renderConfig(){
 // ── Viajes ─────────────────────────────────────────────────────────────────
 function dismissNotif(){const d=D();lastSeenCount=(d.entries||[]).length;localStorage.setItem("lastSeenCount",String(lastSeenCount));render();}
 function setViajeTab(n){viajeTab=n===0?"list":"assign";render();}
-function doDeleteViajeConfirm(id){if(window.confirm("Eliminar este viaje?"))doDeleteViaje(id);}
+function doDeleteViajeConfirm(id){
+  const lid=Number(id)||id;
+  if(!confirmDelete||confirmDelete.type!=="viaje"||confirmDelete.id!==lid){confirmDelete={type:"viaje",id:lid};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
+  confirmDelete=null;
+  doDeleteViaje(lid);
+}
 
 function renderViajes(){
   const d=D();
@@ -752,7 +769,7 @@ function renderViajes(){
     html+="<div><div style=\"font-size:18px;font-weight:700;color:#c9a227;\">✈️ "+v.name+"</div>";
     if(v.desc)html+="<div style=\"font-size:12px;color:#4a4a6a;margin-top:2px;\">"+v.desc+"</div>";
     html+="<div style=\"font-size:11px;color:#4a4a6a;font-family:monospace;margin-top:4px;\">"+v.date+"</div></div>";
-    html+="<span style=\"font-size:14px;cursor:pointer;color:#ef5350;\" onclick=\"doDeleteViajeConfirm("+v.id+")\">🗑️</span>";
+    html+="<span style=\"font-size:"+(confirmDelete&&confirmDelete.type==="viaje"&&confirmDelete.id===v.id?11:14)+"px;cursor:pointer;color:#ef5350;font-family:monospace;\" onclick=\"doDeleteViajeConfirm("+v.id+")\">"+(confirmDelete&&confirmDelete.type==="viaje"&&confirmDelete.id===v.id?"¿Eliminar?":"🗑️")+"</span>";
     html+="</div>";
     html+="<div style=\"display:flex;justify-content:space-around;margin:10px 0;\">";
     html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">TOTAL</div><div style=\"font-size:16px;font-weight:700;color:#c9a227;\">"+fmtS(total)+"</div></div>";
@@ -1370,7 +1387,7 @@ async function doSaveEntry(){
   editId=null;
   await persist({...d,entries,recurring:rec});
   showToast(wasEdit?"✓ Actualizado":"✓ Guardado");
-  tab="resumen";
+  tab=wasEdit?"movimientos":"resumen";
 }
 
 function doEditEntry(id){
