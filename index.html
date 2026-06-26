@@ -241,9 +241,12 @@ let showAbonoForm=false;
 let abonoAmt="";
 let abonoNote="";
 let abonoFrom="";
+let movimientosView="lista"; // "lista" | "categorias"
+let analisisTab="graficas"; // "graficas" | "proyeccion"
+let configTab="ajustes"; // "ajustes" | "prestamos"
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
-const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["historial","📋","Historial"],["cuentas","🗂️","Cuentas"],["viajes","✈️","Viajes"],["prestamos","🤝","Préstamos"],["graficas","📈","Gráficas"],["proyeccion","📉","Proyec."],["ajustes","⚙️","Ajustes"]];
+const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["movimientos","📋","Movimientos"],["viajes","✈️","Viajes"],["analisis","📈","Análisis"],["config","⚙️","Config"]];
 
 function renderNav(){
   const nav=document.getElementById("nav");
@@ -254,7 +257,7 @@ function renderNav(){
     </button>`).join("");
 }
 
-function setTab(t){if(tab==="agregar"&&t!=="agregar")editId=null;if(t!=="ajustes")editCatIdx=null;tab=t;if(t!=="viajes")selectedViaje=null;if(t==="agregar"&&!editId)resetForm();render();}
+function setTab(t){if(tab==="agregar"&&t!=="agregar")editId=null;if(t!=="config")editCatIdx=null;tab=t;if(t!=="viajes")selectedViaje=null;if(t==="agregar"&&!editId)resetForm();render();}
 
 function resetForm(){
   formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina"};
@@ -266,9 +269,8 @@ function render(){
   document.getElementById("hdr-title").textContent=`💑 ${d.names.A} & ${d.names.B}`;
   document.getElementById("hdr-sub").textContent=`División ${d.split.A}/${d.split.B}`;
   renderNav();
-  const views={resumen:renderResumen,agregar:renderAgregar,historial:renderHistorial,cuentas:renderCuentas,viajes:renderViajes,prestamos:renderPrestamos,graficas:renderGraficas,proyeccion:renderProyeccion,ajustes:renderAjustes};
+  const views={resumen:renderResumen,agregar:renderAgregar,movimientos:renderMovimientos,viajes:renderViajes,analisis:renderAnalisis,config:renderConfig};
   document.getElementById("content").innerHTML=(views[tab]||renderResumen)();
-  bindEvents();
 }
 
 // ── Resumen ────────────────────────────────────────────────────────────────
@@ -689,6 +691,25 @@ function renderHistorial(){
   </div>`;
 }
 
+
+// ── Wrappers: tabs combinados ───────────────────────────────────────────────
+function subTabBar(tabs,active,setter){
+  return`<div style="display:flex;border-bottom:1px solid #1e1e3a;background:#0a0a12;position:sticky;top:57px;z-index:40;">
+    ${tabs.map(([v,ic,lb])=>`<button style="flex:1;padding:9px 4px;border:none;background:none;color:${active===v?"#c9a227":"#4a4a6a"};font-size:11px;cursor:pointer;font-family:monospace;border-bottom:2px solid ${active===v?"#c9a227":"transparent"};transition:color .15s;" onclick="${setter}='${v}';render()">${ic} ${lb}</button>`).join("")}
+  </div>`;
+}
+function renderMovimientos(){
+  const bar=subTabBar([["lista","📋","Historial"],["categorias","🗂️","Por categoría"]],movimientosView,"movimientosView");
+  return bar+(movimientosView==="categorias"?renderCuentas():renderHistorial());
+}
+function renderAnalisis(){
+  const bar=subTabBar([["graficas","📈","Gráficas"],["proyeccion","📉","Proyección"]],analisisTab,"analisisTab");
+  return bar+(analisisTab==="proyeccion"?renderProyeccion():renderGraficas());
+}
+function renderConfig(){
+  const bar=subTabBar([["ajustes","⚙️","Ajustes"],["prestamos","🤝","Préstamos"]],configTab,"configTab");
+  return bar+(configTab==="prestamos"?renderPrestamos():renderAjustes());
+}
 
 // ── Viajes ─────────────────────────────────────────────────────────────────
 function dismissNotif(){const d=D();lastSeenCount=(d.entries||[]).length;localStorage.setItem("lastSeenCount",String(lastSeenCount));render();}
@@ -1541,14 +1562,6 @@ function doExportCSV(){
   const a=document.createElement("a");a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(csv);a.download=`finanzas-${today()}.csv`;a.click();
 }
 
-function bindEvents(){}
-
-function doSaldarCatByIdx(idx,amt,from,to){
-  const d=D();
-  const cats=Object.keys(d.entries?d.entries.reduce((m,e)=>{if(e.type==="expense")m[e.category]=1;return m;},{}):{});
-  const cat=cats[idx]||"";
-  if(cat)doSaldarCategoria(cat,amt,from,to);
-}
 function doSaldarFromBtn(btn){const cat=decodeURIComponent(btn.dataset.cat||"");const amt=parseFloat(btn.dataset.am);const from=btn.dataset.fr;const to=btn.dataset.to;if(cat)doSaldarCategoria(cat,amt,from,to);}
 async function doSaldarCategoria(cat,amt,from,to){
   const d=D();
