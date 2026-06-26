@@ -133,8 +133,11 @@ function updateSavingUI(s){
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-const fmt=n=>new Intl.NumberFormat("es-CO",{style:"currency",currency:"COP",maximumFractionDigits:0}).format(n||0);
-const fmtS=n=>{if(Math.abs(n)>=1000000)return"$"+(n/1000000).toFixed(1)+"M";if(Math.abs(n)>=1000)return"$"+(n/1000).toFixed(0)+"K";return fmt(n);};
+const fmt=n=>new Intl.NumberFormat("es-CO",{style:"currency",currency:"COP",maximumFractionDigits:0}).format(Math.round(n||0));
+// fmtS now shows the EXACT number (no M/K compacting) — the user wants precise figures everywhere.
+const fmtS=n=>fmt(n);
+// fmtK: compact form, kept only for tight chart/axis labels where exact numbers don't fit.
+const fmtK=n=>{if(Math.abs(n)>=1000000)return"$"+(n/1000000).toFixed(1)+"M";if(Math.abs(n)>=1000)return"$"+(n/1000).toFixed(0)+"K";return fmt(n);};
 // Format amount input with thousands separators while typing, store raw to state
 function fmtAmountInput(el,setter){
   const raw=el.value.replace(/[^0-9]/g,"");
@@ -197,8 +200,10 @@ let showNewLoan=false;
 let editId=null;
 let confirmDeleteId=null;
 let confirmDeleteLoanId=null;
+let confirmDeleteSettledIdx=null;
 let payAmounts={};
-let formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A"};
+let showBalDetail=false;
+let formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina"};
 let cuentasMonth="all";
 let cuentasExpanded={};
 let viajeTab="list";
@@ -216,11 +221,13 @@ let projMonths=12;
 let projExpandedRec=null;
 let projOverrideEdit=null;
 let projOverrideVal="";
+let projOverrideValB="";
 let projAmorId=null;
 let projAmorData={balance:"",rate:"",months:""};
 let qpDebtId=null;
-let qpDebtWho="A";
-let qpDebtAmt="";
+let qpDebtAccount="";
+let qpDebtAmtA="";
+let qpDebtAmtB="";
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
 const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["historial","📋","Historial"],["cuentas","🗂️","Cuentas"],["viajes","✈️","Viajes"],["prestamos","🤝","Préstamos"],["graficas","📈","Gráficas"],["proyeccion","📉","Proyec."],["ajustes","⚙️","Ajustes"]];
@@ -237,7 +244,7 @@ function renderNav(){
 function setTab(t){if(tab==="agregar"&&t!=="agregar")editId=null;if(t!=="ajustes")editCatIdx=null;tab=t;if(t!=="viajes")selectedViaje=null;if(t==="agregar"&&!editId)resetForm();render();}
 
 function resetForm(){
-  formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A"};
+  formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina"};
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────
@@ -299,33 +306,38 @@ function renderResumen(){
     const expWho=balA<0?`${d.names.A} le debe a ${d.names.B}`:`${d.names.B} le debe a ${d.names.A}`;
     const loanWho=netLoanA<0?`${d.names.A} le debe a ${d.names.B}`:`${d.names.B} le debe a ${d.names.A}`;
     const totalWho=totalNet<0?`${d.names.A} le debe a ${d.names.B}`:`${d.names.B} le debe a ${d.names.A}`;
-    const hasBoth=Math.abs(balA)>1&&Math.abs(netLoanA)>1;
+    const hasExp=Math.abs(balA)>1,hasLoan=Math.abs(netLoanA)>1;
     balHtml=``;
-    if(Math.abs(balA)>1){
-      balHtml+=`<div class="row" style="margin-bottom:2px;"><span style="font-size:12px;color:#8080a0;">📊 Gastos compartidos</span><span style="font-size:15px;font-weight:700;font-family:monospace;">${fmtS(Math.abs(balA))}</span></div>
-      <div style="font-size:11px;color:#6060a0;margin-bottom:8px;">${expWho}</div>`;
-    }
-    if(Math.abs(netLoanA)>1){
-      balHtml+=`<div class="row" style="margin-bottom:2px;"><span style="font-size:12px;color:#8080a0;">🤝 Préstamos (${activeLoans.length})</span><span style="font-size:15px;font-weight:700;font-family:monospace;color:#4db6ac;">${fmtS(Math.abs(netLoanA))}</span></div>
-      <div style="font-size:11px;color:#6060a0;margin-bottom:8px;">${loanWho}</div>`;
-    }
-    if(hasBoth){
-      balHtml+=`<div style="height:1px;background:#2a2040;margin:4px 0 10px;"></div>
-      <div class="big">${fmtS(Math.abs(totalNet))}</div>
-      <div class="lbl" style="margin:4px 0 12px;">${totalWho} <span style="font-size:10px;">(total)</span></div>`;
+    // Headline: the combined total of who-owes-whom
+    if(Math.abs(totalNet)<1){
+      balHtml+=`<div class="big" style="font-size:22px;color:#4caf80;">≈ $0</div>
+      <div class="lbl" style="margin:4px 0 12px;">Gastos y préstamos se compensan entre sí</div>
+      <div style="height:1px;background:#2a2040;margin:0 0 10px;"></div>`;
     }else{
-      const singleAmt=Math.abs(balA)>1?Math.abs(balA):Math.abs(netLoanA);
-      const singleWho=Math.abs(balA)>1?expWho:loanWho;
-      balHtml=`<div class="big">${fmtS(singleAmt)}</div><div class="lbl" style="margin:4px 0 12px;">${singleWho}</div>`;
+      balHtml+=`<div class="big">${fmt(Math.abs(totalNet))}</div>
+      <div class="lbl" style="margin:4px 0 12px;">${totalWho}</div>
+      <div style="height:1px;background:#2a2040;margin:0 0 10px;"></div>`;
     }
-    if(Math.abs(balA)>1){
+    if(hasExp){
+      balHtml+=`<div class="row" style="margin-bottom:2px;cursor:pointer;" onclick="showBalDetail=!showBalDetail;render()"><span style="font-size:12px;color:#8080a0;">📊 Gastos compartidos <span style="font-size:10px;color:#6060a0;">${showBalDetail?"▲ ocultar":"▾ ver detalle"}</span></span><span style="font-size:15px;font-weight:700;font-family:monospace;">${fmt(Math.abs(balA))}</span></div>
+      <div style="font-size:11px;color:#6060a0;margin-bottom:8px;">${expWho}</div>
+      ${showBalDetail?renderBalanceDetail(d):""}`;
+    }
+    if(hasLoan){
+      balHtml+=`<div class="row" style="margin-bottom:2px;"><span style="font-size:12px;color:#8080a0;">🤝 Préstamos (${activeLoans.length})</span><span style="font-size:15px;font-weight:700;font-family:monospace;color:#4db6ac;">${fmt(Math.abs(netLoanA))}</span></div>
+      <div style="font-size:11px;color:#6060a0;margin-bottom:8px;">${loanWho} <span style="font-size:9px;">· ver pestaña Préstamos</span></div>`;
+    }
+    if(hasExp){
       balHtml+=`<button class="btn btn-green" onclick="doSettle()">✓ Saldar gastos compartidos</button>`;
     }
   }
-  const settledHtml=(d.settled||[]).slice(-2).reverse().map(sl=>`
-    <div class="row" style="margin-bottom:3px;">
+  const settledHtml=(d.settled||[]).map((sl,idx)=>({sl,idx})).slice(-4).reverse().map(({sl,idx})=>`
+    <div class="row" style="margin-bottom:4px;align-items:center;">
       <span style="font-size:11px;color:#4a4a6a;font-family:monospace;">${sl.date} · ${nm(sl.from)}→${nm(sl.to)}</span>
-      <span style="font-size:11px;color:#4caf80;font-family:monospace;">${fmtS(sl.amount)}</span>
+      <span style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11px;color:#4caf80;font-family:monospace;">${fmt(sl.amount)}</span>
+        <span style="cursor:pointer;font-size:11px;font-family:monospace;color:${confirmDeleteSettledIdx===idx?"#ef5350":"#4a4a6a"};" onclick="doDeleteSettled(${idx})">${confirmDeleteSettledIdx===idx?"¿borrar?":"🗑️"}</span>
+      </span>
     </div>`).join("");
 
   const alertsHtml=alerts.length>0?`
@@ -367,37 +379,68 @@ function renderResumen(){
     <div class="card card-gold">
       <div class="ct">Balance equitativo · ${sp.A}/${sp.B}</div>
       ${balHtml}
-      ${settledHtml?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2040;">${settledHtml}</div>`:""}
+      ${settledHtml?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid #2a2040;"><div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin-bottom:6px;">Saldos registrados · toca 🗑️ para corregir</div>${settledHtml}</div>`:""}
     </div>
     <div class="card">
-      <div class="ct">Este mes — ${tm}</div>
-      <div style="display:flex;justify-content:space-around;margin-bottom:12px;">
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">COMPARTIDO</div><div style="font-size:20px;font-weight:700;color:#c9a227;">${fmtS(tS)}</div></div>
-        <div style="width:1px;background:#1e1e3a;"></div>
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">${d.names.A.toUpperCase()}</div><div style="font-size:20px;font-weight:700;color:#64b5f6;">${fmtS(tA)}</div></div>
-        <div style="width:1px;background:#1e1e3a;"></div>
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">${d.names.B.toUpperCase()}</div><div style="font-size:20px;font-weight:700;color:#ff8a65;">${fmtS(tB)}</div></div>
-      </div>
-      <div class="div"></div>
-      <div class="row"><span class="lbl">${d.names.A} aporta (${sp.A}%)</span><span class="val green">${fmt(tS*spA)}</span></div>
-      <div class="row"><span class="lbl">${d.names.B} aporta (${sp.B}%)</span><span class="val green">${fmt(tS*spB)}</span></div>
-      <div class="div"></div>
-      <div class="row"><span class="lbl">Ingresos ${d.names.A}</span><span class="val green">${fmt(iA)}</span></div>
-      <div class="row"><span class="lbl">Ingresos ${d.names.B}</span><span class="val green">${fmt(iB)}</span></div>
+      <div class="ct">Este mes — ${tm} · ¿cuánto pone cada uno?</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="text-align:left;font-size:10px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;padding-bottom:8px;"></th>
+          <th style="text-align:right;font-size:12px;color:#64b5f6;font-weight:700;padding-bottom:8px;">${d.names.A}</th>
+          <th style="text-align:right;font-size:12px;color:#ff8a65;font-weight:700;padding-bottom:8px;">${d.names.B}</th>
+        </tr></thead>
+        <tbody style="font-family:monospace;">
+          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">💰 Ingresos</td><td style="text-align:right;font-size:13px;color:#4caf80;">${fmt(iA)}</td><td style="text-align:right;font-size:13px;color:#4caf80;">${fmt(iB)}</td></tr>
+          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">💸 Gastos personales</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tA)}</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tB)}</td></tr>
+          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">🤝 Aporte compartido</td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tS*spA)}<span style="font-size:9px;color:#4a4a6a;"> ${sp.A}%</span></td><td style="text-align:right;font-size:13px;color:#ef5350;">${fmt(tS*spB)}<span style="font-size:9px;color:#4a4a6a;"> ${sp.B}%</span></td></tr>
+          <tr style="border-top:1px solid #2a2040;"><td style="font-size:12px;color:#f0eff4;font-weight:600;padding:6px 0 4px;">Total a cubrir</td><td style="text-align:right;font-size:13px;color:#f0eff4;font-weight:700;padding-top:6px;">${fmt(tA+tS*spA)}</td><td style="text-align:right;font-size:13px;color:#f0eff4;font-weight:700;padding-top:6px;">${fmt(tB+tS*spB)}</td></tr>
+          <tr><td style="font-size:12px;color:#8080a0;padding:4px 0;">Disponible</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iA-tA-tS*spA)>=0?"#4caf80":"#ef5350"};">${fmt(iA-tA-tS*spA)}</td><td style="text-align:right;font-size:13px;font-weight:700;color:${(iB-tB-tS*spB)>=0?"#4caf80":"#ef5350"};">${fmt(iB-tB-tS*spB)}</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e3a;font-size:11px;color:#6060a0;font-family:monospace;display:flex;justify-content:space-between;"><span>Gasto compartido del mes</span><span style="color:#c9a227;font-weight:600;">${fmt(tS)}</span></div>
     </div>
     <div class="card card-blue">
       <div class="ct">Últimos 7 días</div>
       <div style="display:flex;justify-content:space-around;">
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">TOTAL</div><div style="font-size:20px;font-weight:700;color:#4db6ac;">${fmtS(wt)}</div></div>
+        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">TOTAL</div><div style="font-size:16px;font-weight:700;color:#4db6ac;">${fmtS(wt)}</div></div>
         <div style="width:1px;background:#1e1e3a;"></div>
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">COMPARTIDO</div><div style="font-size:20px;font-weight:700;color:#c9a227;">${fmtS(wsh)}</div></div>
+        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">COMPARTIDO</div><div style="font-size:16px;font-weight:700;color:#c9a227;">${fmtS(wsh)}</div></div>
         <div style="width:1px;background:#1e1e3a;"></div>
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">REGISTROS</div><div style="font-size:20px;font-weight:700;color:#f0eff4;">${wk.length}</div></div>
+        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">REGISTROS</div><div style="font-size:16px;font-weight:700;color:#f0eff4;">${wk.length}</div></div>
       </div>
     </div>
     ${alertsHtml}
     ${debts.length>0?renderDebtsCard(debts,d):""}
     ${goalsHtml}
+  </div>`;
+}
+
+// Drill-down: shows each unsettled shared expense and how it builds the balance.
+function renderBalanceDetail(d){
+  const sp=d.split||{A:50,B:50};const spA=sp.A/100,spB=sp.B/100;
+  const shExp=(d.entries||[]).filter(e=>e.type==="expense"&&e.user==="shared"&&e.paidBy)
+    .slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  if(shExp.length===0)return`<div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Sin gastos compartidos con pagador asignado.</div>`;
+  const shown=shExp.slice(0,30);
+  const rows=shown.map(e=>{
+    const payer=e.paidBy;
+    const owesAmt=payer==="A"?Math.round(e.amount*spB):Math.round(e.amount*spA);
+    const ower=payer==="A"?d.names.B:d.names.A;
+    const payerNm=payer==="A"?d.names.A:d.names.B;
+    return`<div style="padding:5px 0;border-bottom:1px solid #1e1e3a22;">
+      <div class="row" style="align-items:flex-start;">
+        <span style="font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${icon(e.category)} ${e.description||e.category}</span>
+        <span style="font-size:12px;font-family:monospace;color:#f0eff4;white-space:nowrap;margin-left:8px;">${fmt(e.amount)}</span>
+      </div>
+      <div style="font-size:10px;color:#6060a0;font-family:monospace;">${e.date} · pagó ${payerNm} → <span style="color:#c9a227;">${ower} debe ${fmt(owesAmt)}</span></div>
+    </div>`;
+  }).join("");
+  const moreNote=shExp.length>30?`<div style="font-size:10px;color:#4a4a6a;font-family:monospace;text-align:center;padding-top:6px;">… y ${shExp.length-30} gastos más</div>`:"";
+  const settledTotal=(d.settled||[]).reduce((s,sl)=>s+sl.amount,0);
+  const settledNote=settledTotal>0?`<div style="font-size:10px;color:#4caf80;font-family:monospace;text-align:center;padding-top:6px;">− ${fmt(settledTotal)} ya saldados se descuentan del total</div>`:"";
+  return`<div style="background:#0e0e1a;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:280px;overflow-y:auto;border:1px solid #1e1e3a;">
+    <div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin-bottom:6px;">Detalle · cada gasto y quién debe a quién</div>
+    ${rows}${moreNote}${settledNote}
   </div>`;
 }
 
@@ -410,9 +453,6 @@ function renderDebtsCard(debts,d){
     const cuota=months>1?Math.round(de.amount/months):de.amount;
     const isShared=de.user==="shared";
     const isQp=qpDebtId===de.id;
-    const paysAmt=Number(qpDebtAmt)||cuota;
-    const owesAmt=qpDebtWho==="A"?Math.round(paysAmt*spB):Math.round(paysAmt*spA);
-    const owesName=qpDebtWho==="A"?d.names.B:d.names.A;
     html+=`<div style="padding:10px 0;border-bottom:1px solid #1e1e3a22;">
       <div class="row" style="margin-bottom:4px;">
         <span style="font-size:13px;font-weight:600;">${icon(de.category)} ${de.description}</span>
@@ -420,26 +460,34 @@ function renderDebtsCard(debts,d){
       </div>
       <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota ~${fmtS(cuota)}/mes · ${months} meses`:""}</div>`;
     if(isQp){
-      html+=`<div style="background:#0e0e1a;border-radius:8px;padding:10px;border:1px solid #c9a22733;margin-top:4px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <span style="font-size:12px;color:#8080a0;">Monto:</span>
-          <input id="qp-amt" type="text" style="flex:1;margin:0;font-size:14px;padding:7px 10px;" value="${fmtInit(qpDebtAmt||String(cuota))}" oninput="fmtAmountInput(this,v=>qpDebtAmt=v)" placeholder="${fmtInit(cuota)}"/>
+      html+=`<div style="background:#0e0e1a;border-radius:8px;padding:10px 12px;border:1px solid #c9a22733;margin-top:4px;">
+        <label class="fl" style="margin-bottom:4px;">Cuenta / banco <span style="color:#3a3a5a;font-weight:400;">(opcional)</span></label>
+        <input type="text" style="margin:0 0 12px;font-size:13px;padding:8px 10px;" value="${qpDebtAccount.replace(/"/g,"&quot;")}" oninput="qpDebtAccount=this.value" placeholder="Ej: Nequi, Bancolombia…"/>`;
+      if(isShared){
+        html+=`<div style="display:flex;gap:8px;margin-bottom:8px;">
+          <div style="flex:1;">
+            <label class="fl">${d.names.A} pagó</label>
+            <input id="qp-amt-a" type="text" style="margin:0;font-size:14px;padding:8px 10px;" value="${fmtInit(qpDebtAmtA)}" placeholder="${fmtInit(Math.round(cuota*spA))}"
+              oninput="fmtAmountInput(this,v=>{qpDebtAmtA=v;if(v&&Number(v)>0){const b=document.getElementById('qp-amt-b');if(b){const r=Math.max(0,${cuota}-Number(v));b.value=new Intl.NumberFormat('es-CO').format(r);qpDebtAmtB=String(r)}}})"/>
+          </div>
+          <div style="flex:1;">
+            <label class="fl">${d.names.B} pagó</label>
+            <input id="qp-amt-b" type="text" style="margin:0;font-size:14px;padding:8px 10px;" value="${fmtInit(qpDebtAmtB)}" placeholder="${fmtInit(Math.round(cuota*spB))}"
+              oninput="fmtAmountInput(this,v=>{qpDebtAmtB=v;if(v&&Number(v)>0){const a=document.getElementById('qp-amt-a');if(a){const r=Math.max(0,${cuota}-Number(v));a.value=new Intl.NumberFormat('es-CO').format(r);qpDebtAmtA=String(r)}}})"/>
+          </div>
         </div>
-        ${isShared?`<div style="font-size:11px;color:#6060a0;font-family:monospace;margin-bottom:10px;">${nm(qpDebtWho)} pagó todo → <span style="color:#c9a227;font-weight:700;">${owesName} deberá ${fmtS(owesAmt)}</span> a ${nm(qpDebtWho)}</div>`:""}
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-green" style="margin:0;flex:1;padding:10px;font-size:13px;" onclick="doQuickPayDebt(${de.id})">✓ Confirmar</button>
-          <button class="btn btn-dark" style="margin:0;flex:1;padding:10px;font-size:13px;" onclick="qpDebtId=null;render()">✕</button>
+        <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:10px;">💡 Al ingresar el monto de uno, el otro se llena con el resto</div>`;
+      }else{
+        html+=`<label class="fl">${nm(de.user)} pagó</label>
+        <input id="qp-amt-a" type="text" style="margin:0 0 10px;font-size:14px;padding:8px 10px;" value="${fmtInit(qpDebtAmtA)}" placeholder="${fmtInit(cuota)}" oninput="fmtAmountInput(this,v=>qpDebtAmtA=v)"/>`;
+      }
+      html+=`<div style="display:flex;gap:6px;">
+          <button class="btn btn-green" style="margin:0;flex:1;padding:10px;font-size:13px;" onclick="doQuickPayDebt(${de.id})">✓ Confirmar pago</button>
+          <button class="btn btn-dark" style="margin:0;padding:10px;font-size:13px;" onclick="qpDebtId=null;qpDebtAmtA='';qpDebtAmtB='';qpDebtAccount='';render()">✕</button>
         </div>
       </div>`;
     }else{
-      html+=`<div style="display:flex;gap:6px;flex-wrap:wrap;">`;
-      if(isShared){
-        html+=`<button class="btn-sm" style="background:#64b5f618;border:1px solid #64b5f633;color:#64b5f6;padding:6px 10px;" data-id="${de.id}" data-who="A" data-amt="${cuota}" onclick="qpDebtId=Number(this.dataset.id);qpDebtWho=this.dataset.who;qpDebtAmt=this.dataset.amt;render()">${d.names.A} pagó</button>`;
-        html+=`<button class="btn-sm" style="background:#ff8a6518;border:1px solid #ff8a6533;color:#ff8a65;padding:6px 10px;" data-id="${de.id}" data-who="B" data-amt="${cuota}" onclick="qpDebtId=Number(this.dataset.id);qpDebtWho=this.dataset.who;qpDebtAmt=this.dataset.amt;render()">${d.names.B} pagó</button>`;
-      }else{
-        html+=`<button class="btn-sm" style="background:#4caf8018;border:1px solid #4caf8033;color:#4caf80;padding:6px 10px;" data-id="${de.id}" data-who="${de.user}" data-amt="${cuota}" onclick="qpDebtId=Number(this.dataset.id);qpDebtWho=this.dataset.who;qpDebtAmt=this.dataset.amt;render()">Registrar pago de cuota</button>`;
-      }
-      html+=`</div>`;
+      html+=`<button class="btn-sm" style="background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;padding:7px 14px;" data-id="${de.id}" onclick="qpDebtId=Number(this.dataset.id);qpDebtAmtA='';qpDebtAmtB='';qpDebtAccount='';render()">💳 Registrar pago de cuota</button>`;
     }
     html+=`</div>`;
   });
@@ -465,6 +513,11 @@ function renderAgregar(){
           : `<div class="chip${f.user==="shared"?" on":""}" onclick="setForm('user','shared')">Compartido</div><div class="chip${f.user==="A"?" on":""}" onclick="setForm('user','A')">Solo ${d.names.A}</div><div class="chip${f.user==="B"?" on":""}" onclick="setForm('user','B')">Solo ${d.names.B}</div>`
         }
       </div>
+      ${f.type==="income"?`
+        <label class="fl">Fuente del ingreso</label>
+        <div class="chips">
+          ${[["nomina","💼 Nómina / salario"],["pareja","💑 Pago de pareja"],["otro","✨ Otro"]].map(([v,l])=>`<div class="chip${(f.incomeSource||"nomina")===v?" on":""}" onclick="setForm('incomeSource','${v}')">${l}</div>`).join("")}
+        </div>`:""}
       ${f.type==="expense"&&f.user==="shared"?`
         <label class="fl">¿Quién pagó?</label>
         <div class="chips">
@@ -518,6 +571,21 @@ function renderAgregar(){
 }
 
 // ── Historial ──────────────────────────────────────────────────────────────
+// Human-readable classification of an entry — used for clear differentiation in lists.
+function entryKind(e){
+  if(e.type==="income"){
+    const src=e.incomeSource;
+    const label=src==="pareja"?"Pago de pareja":src==="otro"?"Otro ingreso":"Nómina / salario";
+    return{label,emoji:"💰",color:"#4caf80",bg:"#4caf8018",bd:"#4caf8033"};
+  }
+  if(e.type==="debt"){
+    const n=e.debtMonths||1;
+    return{label:n>1?`Deuda · ${n} cuotas`:"Deuda",emoji:"🏦",color:"#ef5350",bg:"#ef535018",bd:"#ef535033"};
+  }
+  if(e.user==="shared")return{label:"Gasto compartido",emoji:"💸",color:"#c9a227",bg:"#c9a22718",bd:"#c9a22733"};
+  return{label:"Gasto personal",emoji:"🧍",color:"#e0a35a",bg:"#e0a35a14",bd:"#e0a35a2e"};
+}
+
 function renderHistorial(){
   const d=D();
   const allMonths=[...new Set((d.entries||[]).map(e=>e.date&&e.date.slice(0,7)).filter(Boolean))].sort().reverse();
@@ -547,13 +615,13 @@ function renderHistorial(){
     ${filterType==="expense"&&total>0?`<div class="card" style="padding:10px 14px;margin-bottom:10px;background:#1a1420;">
       <div class="row" style="margin:0;"><span style="font-size:12px;color:#6060a0;">Total filtrado</span><span style="font-size:18px;font-weight:700;color:#c9a227;">${fmt(total)}</span></div>
     </div>`:""}
-    ${list.map(e=>`
-      <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #1e1e3a;align-items:flex-start;">
+    ${list.map(e=>{const k=entryKind(e);return`
+      <div style="display:flex;justify-content:space-between;padding:11px 0 11px 10px;border-bottom:1px solid #1e1e3a;align-items:flex-start;border-left:3px solid ${k.color};">
         <div style="flex:1;margin-right:8px;">
+          <div style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:${k.color};background:${k.bg};border:1px solid ${k.bd};border-radius:6px;padding:2px 7px;margin-bottom:5px;">${k.emoji} ${k.label}</div>
           <div style="font-size:14px;margin-bottom:4px;font-weight:500;">${icon(e.category)} ${e.description}</div>
           ${e.note?`<div style="font-size:11px;color:#4a4a6a;margin-bottom:4px;font-style:italic;">${e.note}</div>`:""}
-          <div style="display:flex;gap:5px;flex-wrap:wrap;">
-            <span class="tag" style="background:${e.type==="income"?"#4caf8018":e.type==="debt"?"#ef535018":"#c9a22718"};color:${e.type==="income"?"#4caf80":e.type==="debt"?"#ef5350":"#c9a227"};border:1px solid ${e.type==="income"?"#4caf8033":e.type==="debt"?"#ef535033":"#c9a22733"};">${e.type==="income"?"ingreso":e.type==="debt"?"deuda":"gasto"}</span>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
             <span class="tag" style="background:#4a4a8a18;color:#8080c0;border:1px solid #4a4a8a33;">${e.user==="shared"?"compartido":"solo "+nm(e.user)}</span>
             ${e.paidBy?`<span class="tag" style="background:#ff8a6518;color:#ff8a65;border:1px solid #ff8a6533;">pagó ${nm(e.paidBy)}</span>`:""}
             ${e.registeredBy?`<span class="tag" style="background:#6060a018;color:#8080b0;border:1px solid #6060a033;">por ${nm(e.registeredBy)}</span>`:""}
@@ -561,13 +629,13 @@ function renderHistorial(){
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0;">
-          <div style="font-size:14px;font-weight:700;font-family:monospace;color:${e.type==="income"?"#4caf80":e.type==="debt"?"#ef5350":"#f0eff4"};">${e.type==="income"?"+":"-"}${fmtS(e.amount)}</div>
+          <div style="font-size:14px;font-weight:700;font-family:monospace;color:${e.type==="income"?"#4caf80":e.type==="debt"?"#ef5350":"#f0eff4"};">${e.type==="income"?"+":"-"}${fmt(e.amount)}</div>
           <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:5px;">
             <span style="font-size:14px;cursor:pointer;" onclick="doEditEntry('${e.id}')">✏️</span>
             <span style="font-size:${confirmDeleteId===e.id?11:14}px;cursor:pointer;color:${confirmDeleteId===e.id?"#ef5350":"inherit"};font-family:${confirmDeleteId===e.id?"monospace":"inherit"};" onclick="doDeleteEntry('${e.id}')">${confirmDeleteId===e.id?"¿Seguro?":"🗑️"}</span>
           </div>
         </div>
-      </div>`).join("")}
+      </div>`}).join("")}
     ${list.length===0?`<div style="color:#4a4a6a;text-align:center;margin-top:48px;font-size:14px;">Sin registros</div>`:""}
     ${list.length>0?`<button class="btn btn-dark" style="margin-top:16px;font-size:13px;" onclick="doExportCSV()">📥 Exportar CSV (${list.length} registros)</button>`:""}
   </div>`;
@@ -611,11 +679,11 @@ function renderViajes(){
     html+="<span style=\"font-size:14px;cursor:pointer;color:#ef5350;\" onclick=\"doDeleteViajeConfirm("+v.id+")\">🗑️</span>";
     html+="</div>";
     html+="<div style=\"display:flex;justify-content:space-around;margin:10px 0;\">";
-    html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">TOTAL</div><div style=\"font-size:20px;font-weight:700;color:#c9a227;\">"+fmtS(total)+"</div></div>";
+    html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">TOTAL</div><div style=\"font-size:16px;font-weight:700;color:#c9a227;\">"+fmtS(total)+"</div></div>";
     html+="<div style=\"width:1px;background:#1e1e3a;\"></div>";
-    html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">COMPARTIDO</div><div style=\"font-size:20px;font-weight:700;color:#4db6ac;\">"+fmtS(sharedTotal)+"</div></div>";
+    html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">COMPARTIDO</div><div style=\"font-size:16px;font-weight:700;color:#4db6ac;\">"+fmtS(sharedTotal)+"</div></div>";
     html+="<div style=\"width:1px;background:#1e1e3a;\"></div>";
-    html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">GASTOS</div><div style=\"font-size:20px;font-weight:700;color:#f0eff4;\">"+vEntries.length+"</div></div>";
+    html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">GASTOS</div><div style=\"font-size:16px;font-weight:700;color:#f0eff4;\">"+vEntries.length+"</div></div>";
     html+="</div>";
     if(sharedTotal>0){
       if(Math.abs(balA)>1){
@@ -718,7 +786,7 @@ function renderViajes(){
       html+="<span class=\"tag\" style=\"background:#4a4a8a18;color:#8080c0;border:1px solid #4a4a8a33;\">"+vE.length+" gasto"+(vE.length!==1?"s":"")+"</span>";
       html+="</div></div>";
       html+="<div style=\"text-align:right;flex-shrink:0;margin-left:12px;\">";
-      html+="<div style=\"font-size:20px;font-weight:700;color:#c9a227;\">"+fmtS(tot)+"</div>";
+      html+="<div style=\"font-size:16px;font-weight:700;color:#c9a227;\">"+fmtS(tot)+"</div>";
       if(sh>0)html+="<div style=\"font-size:11px;color:#4a4a6a;font-family:monospace;\">"+fmtS(sh)+" compartido</div>";
       html+="<div style=\"font-size:12px;color:#c9a227;margin-top:4px;\">Ver →</div>";
       html+="</div></div></div>";
@@ -741,9 +809,9 @@ function renderPrestamos(){
     ${active.length>0?`<div class="card card-blue">
       <div class="ct">Resumen activo</div>
       <div style="display:flex;justify-content:space-around;">
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">LE DEBEN A ${d.names.A.toUpperCase()}</div><div style="font-size:22px;font-weight:700;color:#64b5f6;">${fmtS(oA)}</div></div>
+        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">LE DEBEN A ${d.names.A.toUpperCase()}</div><div style="font-size:17px;font-weight:700;color:#64b5f6;">${fmtS(oA)}</div></div>
         <div style="width:1px;background:#1e1e3a;"></div>
-        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">LE DEBEN A ${d.names.B.toUpperCase()}</div><div style="font-size:22px;font-weight:700;color:#ff8a65;">${fmtS(oB)}</div></div>
+        <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">LE DEBEN A ${d.names.B.toUpperCase()}</div><div style="font-size:17px;font-weight:700;color:#ff8a65;">${fmtS(oB)}</div></div>
       </div>
     </div>`:""}
     <button class="btn" onclick="showNewLoan=!showNewLoan;render()">${showNewLoan?"✕ Cancelar":"🤝 Registrar nuevo préstamo"}</button>
@@ -783,9 +851,9 @@ function renderPrestamos(){
         </div>
         <div style="font-size:11px;color:#4a4a6a;margin-bottom:12px;font-family:monospace;">${loan.date}${loan.note?` · ${loan.note}`:""}</div>
         <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
-          <div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">TOTAL</div><div style="font-size:20px;font-weight:700;">${fmtS(loan.amount)}</div></div>
-          <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">PAGADO</div><div style="font-size:20px;font-weight:700;color:#4caf80;">${fmtS(loan.paid)}</div></div>
-          <div style="text-align:right;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">PENDIENTE</div><div style="font-size:20px;font-weight:700;color:${color};">${fmtS(rem)}</div></div>
+          <div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">TOTAL</div><div style="font-size:16px;font-weight:700;">${fmtS(loan.amount)}</div></div>
+          <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">PAGADO</div><div style="font-size:16px;font-weight:700;color:#4caf80;">${fmtS(loan.paid)}</div></div>
+          <div style="text-align:right;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">PENDIENTE</div><div style="font-size:16px;font-weight:700;color:${color};">${fmtS(rem)}</div></div>
         </div>
         <div class="bar-wrap"><div class="bar" style="width:${pct}%;background:${color};box-shadow:0 0 8px ${color}60;"></div></div>
         <div class="row" style="margin-bottom:12px;">
@@ -799,7 +867,7 @@ function renderPrestamos(){
             <button class="btn-sm" style="background:#1e2d1e;border:1px solid #4caf8044;color:#4caf80;font-size:11px;" onclick="doLoanPay('${loan.id}',${rem})">Pagar todo (${fmtS(rem)})</button>
           </div>
           <div style="display:flex;gap:8px;">
-            <input style="flex:1;margin-bottom:0;font-size:13px;" type="number" inputmode="numeric" placeholder="Otro monto…" value="${payAmounts[loan.id]||""}" oninput="payAmounts['${loan.id}']=this.value" id="pay-${loan.id}"/>
+            <input style="flex:1;margin-bottom:0;font-size:13px;" type="text" inputmode="numeric" placeholder="Otro monto…" value="${fmtInit(payAmounts[loan.id]||"")}" oninput="fmtAmountInput(this,v=>payAmounts['${loan.id}']=v)" id="pay-${loan.id}"/>
             <button class="btn-sm" style="background:#4caf80;color:#fff;flex-shrink:0;" onclick="doLoanPayCustom('${loan.id}',${rem})">Pagar</button>
           </div>
         </div>
@@ -872,11 +940,11 @@ function renderCuentas(){
   html+='<div class="card card-gold">';
   html+='<div class="ct">Resumen general'+(cuentasMonth!=="all"?" — "+cuentasMonth:"")+'</div>';
   html+='<div style="display:flex;justify-content:space-around;margin-bottom:12px;">';
-  html+='<div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">TOTAL</div><div style="font-size:22px;font-weight:700;color:#c9a227;">'+fmtS(grandTotal)+'</div></div>';
+  html+='<div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">TOTAL</div><div style="font-size:17px;font-weight:700;color:#c9a227;">'+fmtS(grandTotal)+'</div></div>';
   html+='<div style="width:1px;background:#1e1e3a;"></div>';
-  html+='<div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">COMPARTIDO</div><div style="font-size:22px;font-weight:700;color:#4db6ac;">'+fmtS(grandShared)+'</div></div>';
+  html+='<div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">COMPARTIDO</div><div style="font-size:17px;font-weight:700;color:#4db6ac;">'+fmtS(grandShared)+'</div></div>';
   html+='<div style="width:1px;background:#1e1e3a;"></div>';
-  html+='<div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">PROPIOS</div><div style="font-size:22px;font-weight:700;color:#ba68c8;">'+fmtS(grandOwn)+'</div></div>';
+  html+='<div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">PROPIOS</div><div style="font-size:17px;font-weight:700;color:#ba68c8;">'+fmtS(grandOwn)+'</div></div>';
   html+='</div>';
 
   if(Math.abs(globalBalA)>1){
@@ -885,7 +953,7 @@ function renderCuentas(){
     html+='<div style="background:'+(globalBalA>0?"#1e2d1e":"#1a1510")+';border:1px solid '+(globalBalA>0?"#4caf8044":"#c9a22744")+';border-radius:10px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">';
     html+='<div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">BALANCE GLOBAL COMPARTIDOS</div>';
     html+='<div style="font-size:13px;color:'+colorG+';">'+whoGlobal+'</div></div>';
-    html+='<div style="font-size:22px;font-weight:700;color:'+colorG+';font-family:monospace;">'+fmt(Math.abs(globalBalA))+'</div>';
+    html+='<div style="font-size:17px;font-weight:700;color:'+colorG+';font-family:monospace;">'+fmt(Math.abs(globalBalA))+'</div>';
     html+='</div>';
   }else{
     html+='<div style="font-size:13px;color:#4caf80;text-align:center;padding:6px;">✅ Balance global al día</div>';
@@ -921,7 +989,7 @@ function renderCuentas(){
     if(c.ownB>0)html+='<span class="tag" style="background:#ff8a6518;color:#ff8a65;border:1px solid #ff8a6533;">'+nB+' '+fmtS(c.ownB)+'</span>';
     html+='</div></div>';
     html+='<div style="text-align:right;flex-shrink:0;margin-left:8px;">';
-    html+='<div style="font-size:20px;font-weight:700;color:'+color+';">'+fmtS(c.total)+'</div>';
+    html+='<div style="font-size:16px;font-weight:700;color:'+color+';">'+fmtS(c.total)+'</div>';
     html+='<div style="font-size:11px;color:#4a4a6a;font-family:monospace;">'+c.entries.length+' reg.</div>';
     html+='<div style="font-size:13px;color:#4a4a6a;margin-top:2px;">'+(expanded?'▲':'▼')+'</div>';
     html+='</div></div>';
@@ -1188,8 +1256,8 @@ function renderAjustes(){
         return`<div class="card">
           <div class="row" style="margin-bottom:8px;"><span style="font-size:15px;font-weight:700;">${debt.description}</span><span class="tag" style="background:${color}18;color:${color};border:1px solid ${color}33;">${debt.user==="shared"?"compartida":"solo "+nm(debt.user)}</span></div>
           <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
-            <div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">CAPITAL</div><div style="font-size:20px;font-weight:700;color:#ef5350;">${fmtS(debt.amount)}</div></div>
-            <div style="text-align:right;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">CUOTA/MES</div><div style="font-size:20px;font-weight:700;color:${color};">${fmtS(monthly)}</div></div>
+            <div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">CAPITAL</div><div style="font-size:16px;font-weight:700;color:#ef5350;">${fmtS(debt.amount)}</div></div>
+            <div style="text-align:right;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:2px;">CUOTA/MES</div><div style="font-size:16px;font-weight:700;color:${color};">${fmtS(monthly)}</div></div>
           </div>
           ${debt.user==="shared"?`<div class="row"><span class="lbl">${d.names.A} (${d.split.A}%)</span><span class="val" style="color:${color};">${fmt(monthly*spA2)}/mes</span></div>
           <div class="row"><span class="lbl">${d.names.B} (${d.split.B}%)</span><span class="val" style="color:${color};">${fmt(monthly*spB2)}/mes</span></div>`:""}
@@ -1210,7 +1278,7 @@ async function doSaveEntry(){
   const spB=d.split.B/100,spA=d.split.A/100;
   const cats=f.user==="shared"?(d.cats.shared||[]):(d.cats.personal||[]);
   const cat=f.category||cats[0]||"";
-  const entry={id:editId||Date.now(),date:f.date,type:f.type,user:f.user,category:cat,description:f.description||cat,amount:Number(f.amount),paidBy:f.type==="expense"&&f.user==="shared"?f.paidBy:null,debtMonths:f.type==="debt"?Number(f.debtMonths):null,debtStart:f.type==="debt"?f.debtStart:null,note:f.note||null,isRecurring:f.isRecurring||false,registeredBy:f.registeredBy||"A"};
+  const entry={id:editId||Date.now(),date:f.date,type:f.type,user:f.user,category:cat,description:f.description||cat,amount:Number(f.amount),paidBy:f.type==="expense"&&f.user==="shared"?f.paidBy:null,debtMonths:f.type==="debt"?Number(f.debtMonths):null,debtStart:f.type==="debt"?f.debtStart:null,note:f.note||null,isRecurring:f.isRecurring||false,registeredBy:f.registeredBy||"A",incomeSource:f.type==="income"?(f.incomeSource||"nomina"):null};
   let entries=[...(d.entries||[])];
   if(editId){entries=entries.map(e=>e.id===editId?entry:e);}
   else{entries=[...entries,entry];}
@@ -1228,7 +1296,7 @@ function doEditEntry(id){
   const e=d.entries.find(x=>x.id===Number(id)||x.id===id);
   if(!e)return;
   editId=e.id;
-  formState={type:e.type,user:e.user,category:e.category,description:e.description||"",amount:String(e.amount),date:e.date,paidBy:e.paidBy||"A",debtMonths:e.debtMonths||12,debtStart:e.debtStart||today(),note:e.note||"",isRecurring:false,registeredBy:e.registeredBy||"A"};
+  formState={type:e.type,user:e.user,category:e.category,description:e.description||"",amount:String(e.amount),date:e.date,paidBy:e.paidBy||"A",debtMonths:e.debtMonths||12,debtStart:e.debtStart||today(),note:e.note||"",isRecurring:false,registeredBy:e.registeredBy||"A",incomeSource:e.incomeSource||"nomina"};
   tab="agregar";render();
 }
 
@@ -1250,6 +1318,15 @@ async function doSettle(){
   const from=netA>0?"B":"A",to=netA>0?"A":"B";
   await persist({...d,settled:[...(d.settled||[]),{date:today(),amount,from,to}]});
   showToast("✓ Balance saldado");
+}
+
+function doDeleteSettled(idx){
+  const i=Number(idx);
+  if(confirmDeleteSettledIdx!==i){confirmDeleteSettledIdx=i;setTimeout(()=>{confirmDeleteSettledIdx=null;render();},3000);render();return;}
+  confirmDeleteSettledIdx=null;
+  const d=D();
+  persist({...d,settled:(d.settled||[]).filter((_,j)=>j!==i)});
+  showToast("✓ Saldo eliminado");
 }
 
 async function doAddRecurring(id){
@@ -1279,17 +1356,20 @@ async function doAddLoan(){
 async function doLoanPay(id,amt){
   const d=D();const lid=Number(id)||id;
   const loan=(d.loans||[]).find(l=>l.id===lid);if(!loan)return;
-  const newPaid=loan.paid+amt;
-  const nl=(d.loans||[]).map(l=>l.id===lid?{...l,paid:newPaid,payments:[...l.payments,{date:today(),amount:amt}],status:newPaid>=loan.amount?"settled":"active"}:l);
+  const pay=Math.round(Number(amt)||0);
+  if(pay<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const newPaid=(loan.paid||0)+pay;
+  const nl=(d.loans||[]).map(l=>l.id===lid?{...l,paid:newPaid,payments:[...(l.payments||[]),{date:today(),amount:pay}],status:newPaid>=loan.amount?"settled":"active"}:l);
   await persist({...d,loans:nl});
   showToast(newPaid>=loan.amount?"🎉 Préstamo saldado":"✓ Pago registrado");
 }
 
 function doLoanPayCustom(id,maxAmt){
-  const v=Number(payAmounts[id]);
+  const lid=Number(id)||id;
+  const v=Number(payAmounts[id]||payAmounts[lid]);
   if(!v||v<=0){showToast("⚠️ Ingresa un monto");return;}
   doLoanPay(id,Math.min(v,maxAmt));
-  payAmounts[id]="";
+  payAmounts[id]="";payAmounts[lid]="";
 }
 
 function doDeleteLoan(id){
@@ -1471,25 +1551,29 @@ async function doQuickPayDebt(id){
   if(!de)return;
   const months=de.debtMonths||1;
   const baseCuota=months>1?Math.round(de.amount/months):de.amount;
-  const amt=Number(qpDebtAmt)||baseCuota;
-  if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
   const sp=d.split||{A:50,B:50};
-  const entry={
-    id:Date.now(),date:today(),type:"expense",
-    user:de.user,category:de.category,
-    description:"Cuota "+de.description,
-    amount:amt,
-    paidBy:de.user==="shared"?qpDebtWho:null,
-    note:"Cuota de deuda",isRecurring:false,
-    registeredBy:qpDebtWho
-  };
-  qpDebtId=null;qpDebtAmt="";
-  await persist({...d,entries:[...(d.entries||[]),entry]});
+  const amtA=Number(qpDebtAmtA)||0;
+  const amtB=de.user==="shared"?(qpDebtAmtB!==""?Number(qpDebtAmtB):Math.max(0,baseCuota-amtA)):0;
+  const note=qpDebtAccount||null;
+  if(amtA<=0&&amtB<=0){showToast("⚠️ Ingresa al menos un monto");return;}
+  const newEntries=[];
   if(de.user==="shared"){
-    const owes=qpDebtWho==="A"?d.names.B:d.names.A;
-    const owesAmt=Math.round(amt*(qpDebtWho==="A"?sp.B:sp.A)/100);
-    showToast(`✓ Cuota registrada — ${owes} debe ${fmtS(owesAmt)} a ${nm(qpDebtWho)}`);
-  }else{showToast("✓ Cuota registrada");}
+    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:"shared",category:de.category,description:"Cuota "+de.description,amount:amtA,paidBy:"A",note,isRecurring:false,registeredBy:"A"});
+    if(amtB>0)newEntries.push({id:Date.now()+1,date:today(),type:"expense",user:"shared",category:de.category,description:"Cuota "+de.description,amount:amtB,paidBy:"B",note,isRecurring:false,registeredBy:"B"});
+  }else{
+    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:de.user,category:de.category,description:"Cuota "+de.description,amount:amtA,paidBy:null,note,isRecurring:false,registeredBy:de.user});
+  }
+  const totalPaid=amtA+amtB;
+  const netA=de.user==="shared"?amtA-totalPaid*(sp.A/100):0;
+  qpDebtId=null;qpDebtAmtA="";qpDebtAmtB="";qpDebtAccount="";
+  await persist({...d,entries:[...(d.entries||[]),...newEntries]});
+  if(de.user==="shared"&&Math.abs(netA)>1){
+    const owes=netA>0?d.names.B:d.names.A;
+    const owed=netA>0?d.names.A:d.names.B;
+    showToast(`✓ ${fmtS(totalPaid)} registrado — ${owes} debe ${fmtS(Math.abs(Math.round(netA)))} a ${owed}`);
+  }else{
+    showToast(`✓ Cuota ${fmtS(amtA>0?amtA:amtB)} registrada`);
+  }
 }
 
 // ── Proyección ─────────────────────────────────────────────────────────────
@@ -1499,9 +1583,24 @@ function moElapsed(startKey,curKey){
   const cy=parseInt(curKey.slice(0,4)),cm=parseInt(curKey.slice(5));
   return(cy-sy)*12+(cm-sm);
 }
+// An override value may be a plain number (total) or {A,B} (per-person). Returns the total.
+function ovTotal(ov,fallback){
+  if(ov==null)return fallback;
+  if(typeof ov==="object")return(Number(ov.A)||0)+(Number(ov.B)||0);
+  return Number(ov)||0;
+}
+// Per-person split of a recurring item for a given month. base amount is a total.
+function recSplitForMonth(r,key,base,sp){
+  const ov=(r.overrides&&r.overrides[key]!=null)?r.overrides[key]:null;
+  if(ov&&typeof ov==="object")return{a:Number(ov.A)||0,b:Number(ov.B)||0,total:(Number(ov.A)||0)+(Number(ov.B)||0),isOv:true};
+  const total=ov!=null?Number(ov)||0:base;
+  const a=Math.round(total*(sp.A/100));
+  return{a,b:total-a,total,isOv:ov!=null};
+}
 
 function buildProjection(d,n){
   n=n||12;
+  const sp=d.split||{A:50,B:50};
   const rows=[];
   const now=new Date();
   // Pre-build set of recurring debt IDs to avoid double-counting
@@ -1509,21 +1608,29 @@ function buildProjection(d,n){
   for(let i=0;i<n;i++){
     const date=new Date(now.getFullYear(),now.getMonth()+i,1);
     const key=moKey(date.getFullYear(),date.getMonth()+1);
-    let income=0,expenses=0;
+    let income=0,expenses=0,shareA=0,shareB=0; // shareA/B = what each person puts toward shared outflows
     // Recurring items
     (d.recurring||[]).forEach(r=>{
       const ov=(r.overrides&&r.overrides[key]!=null)?r.overrides[key]:null;
+      let amt,isExp;
       if(r.type==="debt"&&(r.debtMonths||0)>1){
         const monthly=Math.round(r.amount/(r.debtMonths));
         const startKey=(r.debtStart||key).slice(0,7);
         const elapsed=moElapsed(startKey,key);
         if(elapsed<0||elapsed>=(r.debtMonths))return;
-        expenses+=ov!=null?ov:monthly;
+        amt=ovTotal(ov,monthly);isExp=true;
+      }else if(r.type==="income"){
+        amt=ovTotal(ov,r.amount);isExp=false;
       }else{
-        const amt=ov!=null?ov:r.amount;
-        if(r.type==="income")income+=amt;
-        else expenses+=amt;
+        amt=ovTotal(ov,r.amount);isExp=true;
       }
+      if(isExp){
+        expenses+=amt;
+        if(r.user==="shared"){
+          const s=recSplitForMonth(r,key,r.type==="debt"&&(r.debtMonths||0)>1?Math.round(r.amount/r.debtMonths):r.amount,sp);
+          shareA+=s.a;shareB+=s.b;
+        }else if(r.user==="A")shareA+=amt;else if(r.user==="B")shareB+=amt;
+      }else income+=amt;
     });
     // Non-recurring debt entries with installments (no duplicate with recurring)
     (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring).forEach(e=>{
@@ -1533,9 +1640,12 @@ function buildProjection(d,n){
       if(elapsed<0||elapsed>=(e.debtMonths))return;
       // Skip if covered by a recurring item
       if(recDebtCats.has(e.category+"|"+(e.description||"")))return;
-      expenses+=Math.round(e.amount/(e.debtMonths));
+      const monthly=Math.round(e.amount/(e.debtMonths));
+      expenses+=monthly;
+      if(e.user==="shared"){const a=Math.round(monthly*sp.A/100);shareA+=a;shareB+=monthly-a;}
+      else if(e.user==="A")shareA+=monthly;else if(e.user==="B")shareB+=monthly;
     });
-    rows.push({key,mo:String(date.getMonth()+1).padStart(2,"0"),income,expenses,net:income-expenses});
+    rows.push({key,mo:String(date.getMonth()+1).padStart(2,"0"),income,expenses,net:income-expenses,shareA,shareB});
   }
   return rows;
 }
@@ -1653,6 +1763,7 @@ function renderAmortSection(r){
 
 function renderProyeccion(){
   const d=D();
+  const sp=d.split||{A:50,B:50};
   const proj=buildProjection(d,projMonths);
   const totalIncome=proj.reduce((s,p)=>s+p.income,0);
   const totalExpenses=proj.reduce((s,p)=>s+p.expenses,0);
@@ -1669,9 +1780,11 @@ function renderProyeccion(){
   const tableRows=proj.map(p=>`
     <tr>
       <td style="font-family:monospace;font-size:11px;color:#8080a0;padding:4px 6px;white-space:nowrap;">${p.key}</td>
-      <td style="font-family:monospace;font-size:12px;color:#4caf80;text-align:right;padding:4px 6px;">${fmtS(p.income)}</td>
-      <td style="font-family:monospace;font-size:12px;color:#ef5350;text-align:right;padding:4px 6px;">${fmtS(p.expenses)}</td>
-      <td style="font-family:monospace;font-size:13px;font-weight:600;text-align:right;padding:4px 6px;color:${p.net>=0?"#4caf80":"#ef5350"};">${fmtS(p.net)}</td>
+      <td style="font-family:monospace;font-size:12px;color:#4caf80;text-align:right;padding:4px 6px;">${fmt(p.income)}</td>
+      <td style="font-family:monospace;font-size:12px;color:#ef5350;text-align:right;padding:4px 6px;">${fmt(p.expenses)}</td>
+      <td style="font-family:monospace;font-size:11px;color:#64b5f6;text-align:right;padding:4px 6px;white-space:nowrap;">${fmt(p.shareA)}</td>
+      <td style="font-family:monospace;font-size:11px;color:#ff8a65;text-align:right;padding:4px 6px;white-space:nowrap;">${fmt(p.shareB)}</td>
+      <td style="font-family:monospace;font-size:13px;font-weight:600;text-align:right;padding:4px 6px;color:${p.net>=0?"#4caf80":"#ef5350"};white-space:nowrap;">${fmt(p.net)}</td>
     </tr>`).join("");
   const tableHtml=`
     <div style="overflow-x:auto;margin-top:10px;border-top:1px solid #1e1e3a;padding-top:10px;">
@@ -1680,6 +1793,8 @@ function renderProyeccion(){
           <th style="text-align:left;font-family:monospace;font-size:9px;color:#4a4a6a;text-transform:uppercase;padding-bottom:6px;padding-left:6px;">Mes</th>
           <th style="text-align:right;font-family:monospace;font-size:9px;color:#4caf80;text-transform:uppercase;padding-bottom:6px;">Ingresos</th>
           <th style="text-align:right;font-family:monospace;font-size:9px;color:#ef5350;text-transform:uppercase;padding-bottom:6px;">Egresos</th>
+          <th style="text-align:right;font-family:monospace;font-size:9px;color:#64b5f6;text-transform:uppercase;padding-bottom:6px;">Pone ${d.names.A}</th>
+          <th style="text-align:right;font-family:monospace;font-size:9px;color:#ff8a65;text-transform:uppercase;padding-bottom:6px;">Pone ${d.names.B}</th>
           <th style="text-align:right;font-family:monospace;font-size:9px;color:#c9a227;text-transform:uppercase;padding-bottom:6px;padding-right:6px;">Flujo</th>
         </tr></thead>
         <tbody>${tableRows}</tbody>
@@ -1692,34 +1807,55 @@ function renderProyeccion(){
       const isExpanded=projExpandedRec===r.id;
       const overrides=r.overrides||{};
       const ovCount=Object.keys(overrides).length;
+      const isShared=r.user==="shared";
+      const isDebt=r.type==="debt"&&(r.debtMonths||0)>1;
+      const monthBase=isDebt?Math.round(r.amount/r.debtMonths):r.amount;
       const monthRows=isExpanded?proj.map(p=>{
         const isEditing=projOverrideEdit&&projOverrideEdit.recId===r.id&&projOverrideEdit.monthKey===p.key;
-        const curAmt=(overrides[p.key]!=null)?overrides[p.key]:r.amount;
-        const isOv=overrides[p.key]!=null;
+        const s=recSplitForMonth(r,p.key,monthBase,sp);
         if(isEditing){
+          if(isShared){
+            return`<div style="padding:6px 0;border-bottom:1px solid #1e1e3a22;">
+              <div style="font-size:11px;color:#6060a0;font-family:monospace;margin-bottom:5px;">${p.key}</div>
+              <div style="display:flex;gap:6px;align-items:flex-end;">
+                <div style="flex:1;"><div class="fl">${d.names.A}</div><input id="proj-ov-inp" type="text" style="font-size:13px;margin:0;padding:6px 8px;" value="${fmtInit(projOverrideVal)}" oninput="fmtAmountInput(this,v=>{projOverrideVal=v;const b=document.getElementById('proj-ov-b');if(b){const r2=Math.max(0,${monthBase}-Number(v));b.value=new Intl.NumberFormat('es-CO').format(r2);projOverrideValB=String(r2)}})"/></div>
+                <div style="flex:1;"><div class="fl">${d.names.B}</div><input id="proj-ov-b" type="text" style="font-size:13px;margin:0;padding:6px 8px;" value="${fmtInit(projOverrideValB)}" oninput="fmtAmountInput(this,v=>{projOverrideValB=v;const a=document.getElementById('proj-ov-inp');if(a){const r2=Math.max(0,${monthBase}-Number(v));a.value=new Intl.NumberFormat('es-CO').format(r2);projOverrideVal=String(r2)}})"/></div>
+                <button class="btn-sm" style="background:#4caf80;color:#fff;" onclick="event.stopPropagation();doSaveOverride()">✓</button>
+                <button class="btn-sm btn-dark" onclick="event.stopPropagation();projOverrideEdit=null;render()">✕</button>
+              </div>
+            </div>`;
+          }
           return`<div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #1e1e3a22;">
             <span style="font-size:11px;color:#6060a0;font-family:monospace;min-width:64px;">${p.key}</span>
-            <input id="proj-ov-inp" type="text" style="flex:1;font-size:13px;margin:0;padding:6px 10px;" value="${fmtInit(projOverrideVal)}" oninput="fmtAmountInput(this,v=>projOverrideVal=v)" placeholder="${fmtInit(r.amount)}"/>
+            <input id="proj-ov-inp" type="text" style="flex:1;font-size:13px;margin:0;padding:6px 10px;" value="${fmtInit(projOverrideVal)}" oninput="fmtAmountInput(this,v=>projOverrideVal=v)" placeholder="${fmtInit(monthBase)}"/>
             <button class="btn-sm" style="background:#4caf80;color:#fff;" onclick="event.stopPropagation();doSaveOverride()">✓</button>
             <button class="btn-sm btn-dark" onclick="event.stopPropagation();projOverrideEdit=null;render()">✕</button>
           </div>`;
         }
+        if(isShared){
+          return`<div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #1e1e3a22;">
+            <span style="font-size:11px;color:#6060a0;font-family:monospace;min-width:54px;">${p.key}</span>
+            <span style="flex:1;font-size:12px;font-family:monospace;color:${s.isOv?"#c9a227":"#f0eff4"};"><span style="color:#64b5f6;">${d.names.A}:</span> ${fmt(s.a)} &nbsp;<span style="color:#ff8a65;">${d.names.B}:</span> ${fmt(s.b)}</span>
+            <button class="btn-sm btn-dark" onclick="event.stopPropagation();doStartOverrideEdit(${r.id},'${p.key}',${s.a},${s.b},1)">✏️</button>
+            ${s.isOv?`<button class="btn-sm" style="background:#1e1e3a;color:#ef5350;border:1px solid #ef535033;" onclick="event.stopPropagation();doClearOverride(${r.id},'${p.key}')">✕</button>`:""}
+          </div>`;
+        }
         return`<div style="display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #1e1e3a22;">
           <span style="font-size:11px;color:#6060a0;font-family:monospace;min-width:64px;">${p.key}</span>
-          <span style="flex:1;font-size:13px;font-family:monospace;color:${isOv?"#c9a227":"#f0eff4"};">${fmtS(curAmt)}</span>
-          <button class="btn-sm btn-dark" onclick="event.stopPropagation();doStartOverrideEdit(${r.id},'${p.key}',${curAmt})">✏️</button>
-          ${isOv?`<button class="btn-sm" style="background:#1e1e3a;color:#ef5350;border:1px solid #ef535033;" onclick="event.stopPropagation();doClearOverride(${r.id},'${p.key}')">✕</button>`:""}
+          <span style="flex:1;font-size:13px;font-family:monospace;color:${s.isOv?"#c9a227":"#f0eff4"};">${fmt(s.total)}</span>
+          <button class="btn-sm btn-dark" onclick="event.stopPropagation();doStartOverrideEdit(${r.id},'${p.key}',${s.total},0,0)">✏️</button>
+          ${s.isOv?`<button class="btn-sm" style="background:#1e1e3a;color:#ef5350;border:1px solid #ef535033;" onclick="event.stopPropagation();doClearOverride(${r.id},'${p.key}')">✕</button>`:""}
         </div>`;
       }).join(""):"";
       return`<div class="card" style="margin-bottom:8px;">
         <div class="row" style="cursor:pointer;" onclick="doToggleProjRec(${r.id})">
           <div>
-            <div style="font-size:13px;font-weight:600;">${icon(r.category)} ${r.description}</div>
-            <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:2px;">${r.type==="income"?"💰 Ingreso":"💸 Egreso"} · base: ${fmtS(r.amount)}${ovCount>0?" · "+ovCount+" ajuste"+(ovCount!==1?"s":""):""}</div>
+            <div style="font-size:13px;font-weight:600;">${icon(r.category)} ${r.description}${isShared?` <span class="tag" style="background:#c9a22718;color:#c9a227;border:1px solid #c9a22744;">Compartida</span>`:""}</div>
+            <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:2px;">${r.type==="income"?"💰 Ingreso":isDebt?"🏦 Deuda":"💸 Egreso"} · ${isDebt?"cuota":"base"}: ${fmt(monthBase)}${ovCount>0?" · "+ovCount+" ajuste"+(ovCount!==1?"s":""):""}</div>
           </div>
           <span style="font-size:13px;color:#4a4a6a;">${isExpanded?"▲":"▼"}</span>
         </div>
-        ${isExpanded?`<div style="margin-top:6px;border-top:1px solid #1e1e3a;padding-top:6px;">${monthRows}</div>`:""}
+        ${isExpanded?`<div style="margin-top:6px;border-top:1px solid #1e1e3a;padding-top:6px;">${isShared?`<div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:4px;">Edita cuánto pone cada uno por mes · al cambiar uno, el otro se completa con el resto</div>`:""}${monthRows}</div>`:""}
       </div>`;
     }).join("");
   const debtRecs=recItems.filter(r=>r.type==="expense"||r.type==="debt");
@@ -1772,22 +1908,29 @@ function doToggleAmor(id){
   render();
 }
 
-function doStartOverrideEdit(recId,monthKey,curAmt){
-  projOverrideEdit={recId:Number(recId)||recId,monthKey};
-  projOverrideVal=String(curAmt||"");
+function doStartOverrideEdit(recId,monthKey,curA,curB,shared){
+  projOverrideEdit={recId:Number(recId)||recId,monthKey,shared:!!shared};
+  projOverrideVal=String(curA||"");
+  projOverrideValB=String(curB||"");
   render();
   setTimeout(()=>{const inp=document.getElementById("proj-ov-inp");if(inp)inp.focus();},50);
 }
 
 async function doSaveOverride(){
   if(!projOverrideEdit)return;
-  const{recId,monthKey}=projOverrideEdit;
-  const amt=Number(projOverrideVal);
-  if(isNaN(amt)){projOverrideEdit=null;render();return;}
+  const{recId,monthKey,shared}=projOverrideEdit;
   const d=D();
+  let val;
+  if(shared){
+    val={A:Number(projOverrideVal)||0,B:Number(projOverrideValB)||0};
+  }else{
+    const amt=Number(projOverrideVal);
+    if(isNaN(amt)){projOverrideEdit=null;render();return;}
+    val=amt;
+  }
   const newRec=(d.recurring||[]).map(r=>{
     if((Number(r.id)||r.id)!==recId)return r;
-    const overrides={...(r.overrides||{}),[monthKey]:amt};
+    const overrides={...(r.overrides||{}),[monthKey]:val};
     return{...r,overrides};
   });
   projOverrideEdit=null;
