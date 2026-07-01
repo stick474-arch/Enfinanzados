@@ -259,6 +259,9 @@ let qpDebtAccount="";
 let qpDebtAmtA="";
 let qpDebtAmtB="";
 let debtExpandedId=null;
+let payEditId=null;
+let payEditAmt="";
+let payEditBy="A";
 let showAbonoForm=false;
 let abonoAmt="";
 let abonoNote="";
@@ -592,7 +595,20 @@ function renderDebtsCard(debts,d){
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #ff8a6522;"><div style="font-size:9px;color:#ff8a65;font-family:monospace;text-transform:uppercase;">${d.names.B} ha puesto</div><div style="font-size:13px;font-weight:700;color:#ff8a65;font-family:monospace;">${fmtS(paidB)}</div></div>
       </div>`:""}
       ${pays.length>0?`<div style="margin-bottom:8px;"><span style="font-size:11px;color:#4db6ac;cursor:pointer;font-family:monospace;" onclick="debtExpandedId=${isExp?"null":de.id};render()">${isExp?"▲ ocultar":"▾ ver"} ${pays.length} pago${pays.length!==1?"s":""}</span>
-        ${isExp?pays.map(p=>`<div style="display:flex;justify-content:space-between;padding:3px 0 3px 8px;border-left:2px solid #4db6ac33;margin-top:3px;"><span style="font-size:10px;color:#6060a0;font-family:monospace;">${p.date}${p.paidBy?" · "+nm(p.paidBy):""}${p.note?" · "+p.note:""}</span><span style="font-size:10px;color:#4caf80;font-family:monospace;">${fmtS(p.amount)}</span></div>`).join(""):""}
+        ${isExp?pays.map(p=>{
+          if(payEditId===p.id){
+            return`<div style="padding:6px 8px;border-left:2px solid #c9a227;margin-top:3px;background:#0e0e1a;border-radius:0 6px 6px 0;">
+              <div style="font-size:10px;color:#6060a0;font-family:monospace;margin-bottom:5px;">${p.date} · editar pago</div>
+              ${isShared?`<div class="chips" style="margin-bottom:6px;"><div class="chip${payEditBy==="A"?" on":""}" onclick="payEditBy='A';render()">${d.names.A}</div><div class="chip${payEditBy==="B"?" on":""}" onclick="payEditBy='B';render()">${d.names.B}</div></div>`:""}
+              <div style="display:flex;gap:6px;align-items:center;">
+                <input type="text" inputmode="numeric" style="flex:1;margin:0;font-size:13px;padding:6px 8px;" value="${fmtInit(payEditAmt)}" oninput="fmtAmountInput(this,v=>payEditAmt=v)"/>
+                <button class="btn-sm" style="background:#4caf80;color:#fff;" onclick="doSavePayEdit(${p.id})">✓</button>
+                <button class="btn-sm btn-dark" onclick="payEditId=null;render()">✕</button>
+              </div>
+            </div>`;
+          }
+          return`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0 3px 8px;border-left:2px solid #4db6ac33;margin-top:3px;"><span style="font-size:10px;color:#6060a0;font-family:monospace;">${p.date}${p.paidBy?" · "+nm(p.paidBy):""}${p.note?" · "+p.note:""}</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:10px;color:#4caf80;font-family:monospace;">${fmtS(p.amount)}</span><span style="font-size:11px;cursor:pointer;" onclick="doStartPayEdit(${p.id},${p.amount},'${p.paidBy||"A"}')">✏️</span></span></div>`;
+        }).join(""):""}
       </div>`:""}`;
     if(settled){
       html+=`<div style="font-size:12px;color:#4caf80;text-align:center;padding:4px;">✅ Deuda saldada</div></div>`;
@@ -1965,6 +1981,28 @@ async function doDeleteCatFromBtn(btn){
   if(!name)return;
   const d=D();
   await persist({...d,cats:{...d.cats,[type]:(d.cats[type]||[]).filter(c=>c!==name)}});
+}
+
+function doStartPayEdit(id,amt,by){
+  payEditId=Number(id)||id;
+  payEditAmt=String(Math.round(amt)||0);
+  payEditBy=by||"A";
+  debtExpandedId=debtExpandedId; // keep list open
+  render();
+}
+
+async function doSavePayEdit(id){
+  const eid=Number(id)||id;
+  const amt=Number(payEditAmt);
+  if(!amt||amt<=0){showToast("⚠️ Monto inválido");return;}
+  const d=D();
+  const entries=(d.entries||[]).map(e=>{
+    if(e.id!==eid)return e;
+    return{...e,amount:amt,paidBy:e.user==="shared"?payEditBy:e.paidBy};
+  });
+  payEditId=null;
+  await persist({...d,entries});
+  showToast("✓ Pago corregido");
 }
 
 async function doQuickPayDebt(id){
