@@ -259,9 +259,10 @@ let qpDebtAccount="";
 let qpDebtAmtA="";
 let qpDebtAmtB="";
 let debtExpandedId=null;
-let payEditId=null;
-let payEditAmt="";
-let payEditBy="A";
+let payGroupIndex={};   // rebuilt each render: groupKey -> {ids,date,debtId,desc,category,user,amtA,amtB}
+let payEditKey=null;    // which payment group is being edited
+let payEditA="";        // Marce's amount in the edited cuota
+let payEditB="";        // John's amount in the edited cuota
 let showAbonoForm=false;
 let abonoAmt="";
 let abonoNote="";
@@ -556,9 +557,25 @@ function paymentsForDebt(d,de){
     .slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
 }
 
+// Groups a debt's payments into "cuota events" (same date + same debt) so each
+// cuota is one row that can be split between the two people.
+function paymentGroups(d,de){
+  const pays=paymentsForDebt(d,de);
+  const gs={};
+  pays.forEach(p=>{
+    const gk=de.id+"|"+(p.date||"");
+    if(!gs[gk])gs[gk]={key:gk,ids:[],date:p.date,debtId:de.id,desc:de.description,payDesc:p.description||("Cuota "+de.description),category:p.category||de.category,user:de.user,amtA:0,amtB:0,total:0,note:null};
+    const g=gs[gk];g.ids.push(p.id);g.total+=p.amount||0;
+    if(p.paidBy==="A")g.amtA+=p.amount;else if(p.paidBy==="B")g.amtB+=p.amount;else g.amtA+=p.amount; // personal: attribute to the single debtor slot
+    if(p.note&&!g.note)g.note=p.note;
+  });
+  return Object.values(gs).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+}
+
 function renderDebtsCard(debts,d){
   const sp=d.split||{A:50,B:50};
   const spA=sp.A/100,spB=sp.B/100;
+  payGroupIndex={};
   let html=`<div class="card"><div class="ct">Deudas y proyectos · progreso de pago</div>`;
   debts.forEach(de=>{
     const months=de.debtMonths||1;
@@ -594,22 +611,33 @@ function renderDebtsCard(debts,d){
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #64b5f622;"><div style="font-size:9px;color:#64b5f6;font-family:monospace;text-transform:uppercase;">${d.names.A} ha puesto</div><div style="font-size:13px;font-weight:700;color:#64b5f6;font-family:monospace;">${fmtS(paidA)}</div></div>
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #ff8a6522;"><div style="font-size:9px;color:#ff8a65;font-family:monospace;text-transform:uppercase;">${d.names.B} ha puesto</div><div style="font-size:13px;font-weight:700;color:#ff8a65;font-family:monospace;">${fmtS(paidB)}</div></div>
       </div>`:""}
-      ${pays.length>0?`<div style="margin-bottom:8px;"><span style="font-size:11px;color:#4db6ac;cursor:pointer;font-family:monospace;" onclick="debtExpandedId=${isExp?"null":de.id};render()">${isExp?"▲ ocultar":"▾ ver"} ${pays.length} pago${pays.length!==1?"s":""}</span>
-        ${isExp?pays.map(p=>{
-          if(payEditId===p.id){
-            return`<div style="padding:6px 8px;border-left:2px solid #c9a227;margin-top:3px;background:#0e0e1a;border-radius:0 6px 6px 0;">
-              <div style="font-size:10px;color:#6060a0;font-family:monospace;margin-bottom:5px;">${p.date} · editar pago</div>
-              ${isShared?`<div class="chips" style="margin-bottom:6px;"><div class="chip${payEditBy==="A"?" on":""}" onclick="payEditBy='A';render()">${d.names.A}</div><div class="chip${payEditBy==="B"?" on":""}" onclick="payEditBy='B';render()">${d.names.B}</div></div>`:""}
-              <div style="display:flex;gap:6px;align-items:center;">
-                <input type="text" inputmode="numeric" style="flex:1;margin:0;font-size:13px;padding:6px 8px;" value="${fmtInit(payEditAmt)}" oninput="fmtAmountInput(this,v=>payEditAmt=v)"/>
-                <button class="btn-sm" style="background:#4caf80;color:#fff;" onclick="doSavePayEdit(${p.id})">✓</button>
-                <button class="btn-sm btn-dark" onclick="payEditId=null;render()">✕</button>
+      ${(()=>{
+        const groups=paymentGroups(d,de);
+        groups.forEach(g=>{payGroupIndex[g.key]=g;});
+        if(groups.length===0)return"";
+        let out=`<div style="margin-bottom:8px;"><span style="font-size:11px;color:#4db6ac;cursor:pointer;font-family:monospace;" onclick="debtExpandedId=${isExp?"null":de.id};render()">${isExp?"▲ ocultar":"▾ ver"} ${groups.length} pago${groups.length!==1?"s":""}</span>`;
+        if(isExp)out+=groups.map(g=>{
+          if(payEditKey===g.key){
+            return`<div style="padding:8px;border-left:2px solid #c9a227;margin-top:3px;background:#0e0e1a;border-radius:0 6px 6px 0;">
+              <div style="font-size:10px;color:#6060a0;font-family:monospace;margin-bottom:6px;">${g.date} · ¿cuánto puso cada uno en esta cuota?</div>
+              ${isShared?`<div style="display:flex;gap:8px;margin-bottom:6px;">
+                <div style="flex:1;"><label class="fl" style="color:#64b5f6;">${d.names.A} puso</label><input type="text" inputmode="numeric" style="margin:0;font-size:13px;padding:6px 8px;" value="${fmtInit(payEditA)}" oninput="fmtAmountInput(this,v=>payEditA=v)"/></div>
+                <div style="flex:1;"><label class="fl" style="color:#ff8a65;">${d.names.B} puso</label><input type="text" inputmode="numeric" style="margin:0;font-size:13px;padding:6px 8px;" value="${fmtInit(payEditB)}" oninput="fmtAmountInput(this,v=>payEditB=v)"/></div>
+              </div>
+              <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">Suma de la cuota: ${fmt((Number(payEditA)||0)+(Number(payEditB)||0))}</div>`:`
+              <label class="fl">Monto</label><input type="text" inputmode="numeric" style="margin:0 0 6px;font-size:13px;padding:6px 8px;" value="${fmtInit(payEditA)}" oninput="fmtAmountInput(this,v=>payEditA=v)"/>`}
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-green" style="margin:0;flex:1;padding:8px;font-size:13px;" onclick="doSavePayEdit('${g.key}')">💾 Guardar</button>
+                <button class="btn btn-dark" style="margin:0;width:44px;padding:8px;" onclick="payEditKey=null;render()">✕</button>
               </div>
             </div>`;
           }
-          return`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0 3px 8px;border-left:2px solid #4db6ac33;margin-top:3px;"><span style="font-size:10px;color:#6060a0;font-family:monospace;">${p.date}${p.paidBy?" · "+nm(p.paidBy):""}${p.note?" · "+p.note:""}</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:10px;color:#4caf80;font-family:monospace;">${fmtS(p.amount)}</span><span style="font-size:11px;cursor:pointer;" onclick="doStartPayEdit(${p.id},${p.amount},'${p.paidBy||"A"}')">✏️</span></span></div>`;
-        }).join(""):""}
-      </div>`:""}`;
+          const desc=isShared?`${d.names.A} ${fmtS(g.amtA)} · ${d.names.B} ${fmtS(g.amtB)}`:fmtS(g.total);
+          return`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 4px 8px;border-left:2px solid #4db6ac33;margin-top:3px;"><span style="font-size:10px;color:#6060a0;font-family:monospace;">${g.date} · ${desc}</span><span style="display:flex;align-items:center;gap:8px;"><span style="font-size:10px;color:#4caf80;font-family:monospace;">${fmtS(g.total)}</span><span style="font-size:11px;cursor:pointer;" onclick="doStartPayEdit('${g.key}')">✏️</span></span></div>`;
+        }).join("");
+        out+=`</div>`;
+        return out;
+      })()}`;
     if(settled){
       html+=`<div style="font-size:12px;color:#4caf80;text-align:center;padding:4px;">✅ Deuda saldada</div></div>`;
       return;
@@ -1983,26 +2011,34 @@ async function doDeleteCatFromBtn(btn){
   await persist({...d,cats:{...d.cats,[type]:(d.cats[type]||[]).filter(c=>c!==name)}});
 }
 
-function doStartPayEdit(id,amt,by){
-  payEditId=Number(id)||id;
-  payEditAmt=String(Math.round(amt)||0);
-  payEditBy=by||"A";
-  debtExpandedId=debtExpandedId; // keep list open
+function doStartPayEdit(key){
+  const g=payGroupIndex[key];
+  if(!g)return;
+  payEditKey=key;
+  payEditA=String(Math.round(g.amtA)||0);
+  payEditB=String(Math.round(g.amtB)||0);
   render();
 }
 
-async function doSavePayEdit(id){
-  const eid=Number(id)||id;
-  const amt=Number(payEditAmt);
-  if(!amt||amt<=0){showToast("⚠️ Monto inválido");return;}
+async function doSavePayEdit(key){
+  const g=payGroupIndex[key];
+  if(!g)return;
+  const amtA=Number(payEditA)||0;
+  const amtB=Number(payEditB)||0;
+  if(amtA<=0&&amtB<=0){showToast("⚠️ Ingresa al menos un monto");return;}
   const d=D();
-  const entries=(d.entries||[]).map(e=>{
-    if(e.id!==eid)return e;
-    return{...e,amount:amt,paidBy:e.user==="shared"?payEditBy:e.paidBy};
-  });
-  payEditId=null;
+  // Replace all entries of this cuota group with fresh per-person entries.
+  let entries=(d.entries||[]).filter(e=>!g.ids.includes(e.id));
+  const base={date:g.date,type:"expense",category:g.category,description:g.payDesc||("Cuota "+g.desc),note:g.note||null,isRecurring:false,debtId:g.debtId};
+  if(g.user==="shared"){
+    if(amtA>0)entries.push({...base,id:Date.now(),user:"shared",amount:amtA,paidBy:"A",registeredBy:"A"});
+    if(amtB>0)entries.push({...base,id:Date.now()+1,user:"shared",amount:amtB,paidBy:"B",registeredBy:"B"});
+  }else{
+    entries.push({...base,id:Date.now(),user:g.user,amount:amtA||amtB,paidBy:null,registeredBy:g.user});
+  }
+  payEditKey=null;
   await persist({...d,entries});
-  showToast("✓ Pago corregido");
+  showToast("✓ Cuota corregida");
 }
 
 async function doQuickPayDebt(id){
