@@ -74,7 +74,10 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#c9a227;margin:0;}
   <div class="hdr">
     <div class="row" style="margin-bottom:2px;">
       <h1 id="hdr-title">💑 Finanzas en Pareja</h1>
-      <div><span class="dot" id="fb-dot" style="background:#ef5350;"></span><span id="fb-lbl" style="font-size:10px;color:#4a4a6a;font-family:monospace;">conectando…</span></div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="cursor:pointer;font-size:15px;line-height:1;" title="Exportar informe completo" onclick="doExportReport()">📤</span>
+        <span><span class="dot" id="fb-dot" style="background:#ef5350;"></span><span id="fb-lbl" style="font-size:10px;color:#4a4a6a;font-family:monospace;">conectando…</span></span>
+      </div>
     </div>
     <small id="hdr-sub">cargando…</small>
   </div>
@@ -238,6 +241,7 @@ let qpDebtId=null;
 let qpDebtAccount="";
 let qpDebtAmtA="";
 let qpDebtAmtB="";
+let debtExpandedId=null;
 let showAbonoForm=false;
 let abonoAmt="";
 let abonoNote="";
@@ -520,21 +524,55 @@ function renderBalanceDetail(d){
   </div>`;
 }
 
+// Matches cuota payments to a debt: by explicit debtId (new data), else by "Cuota "+description (legacy).
+function paymentsForDebt(d,de){
+  const label="Cuota "+(de.description||"");
+  return (d.entries||[]).filter(e=>e.type==="expense"&&(e.debtId===de.id||e.description===label))
+    .slice().sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+}
+
 function renderDebtsCard(debts,d){
   const sp=d.split||{A:50,B:50};
   const spA=sp.A/100,spB=sp.B/100;
-  let html=`<div class="card"><div class="ct">Deudas · pago rápido de cuota</div>`;
+  let html=`<div class="card"><div class="ct">Deudas y proyectos · progreso de pago</div>`;
   debts.forEach(de=>{
     const months=de.debtMonths||1;
     const cuota=months>1?Math.round(de.amount/months):de.amount;
     const isShared=de.user==="shared";
     const isQp=qpDebtId===de.id;
+    const pays=paymentsForDebt(d,de);
+    const paid=pays.reduce((s,p)=>s+(p.amount||0),0);
+    const pending=Math.max(0,de.amount-paid);
+    const pct=de.amount>0?Math.min(100,paid/de.amount*100):0;
+    const settled=pending<1&&paid>0;
+    const paidA=isShared?pays.filter(p=>p.paidBy==="A").reduce((s,p)=>s+p.amount,0):(de.user==="A"?paid:0);
+    const paidB=isShared?pays.filter(p=>p.paidBy==="B").reduce((s,p)=>s+p.amount,0):(de.user==="B"?paid:0);
+    const cuotasPaid=cuota>0?Math.min(months,Math.round(paid/cuota)):0;
+    const barCol=settled?"#4caf80":"#c9a227";
+    const isExp=debtExpandedId===de.id;
     html+=`<div style="padding:10px 0;border-bottom:1px solid #1e1e3a22;">
       <div class="row" style="margin-bottom:4px;">
-        <span style="font-size:13px;font-weight:600;">${icon(de.category)} ${de.description}</span>
+        <span style="font-size:13px;font-weight:600;">${icon(de.category)} ${de.description}${settled?` <span style="font-size:10px;color:#4caf80;">✅</span>`:""}</span>
         <span class="tag" style="background:${isShared?"#c9a22718":"#1e1e3a"};color:${isShared?"#c9a227":"#6060a0"};border:1px solid ${isShared?"#c9a22744":"#2a2a4a"};">${isShared?"Compartida":nm(de.user)}</span>
       </div>
-      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota ~${fmtS(cuota)}/mes · ${months} meses`:""}</div>`;
+      <div class="bar-wrap" style="margin:6px 0 4px;"><div class="bar" style="width:${pct}%;background:${barCol};"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">
+        <span style="color:#4caf80;">Pagado ${fmtS(paid)}</span>
+        <span>${Math.round(pct)}%${months>1?` · cuota ${cuotasPaid}/${months}`:""}</span>
+        <span style="color:${pending>0?"#ef5350":"#4caf80"};">Falta ${fmtS(pending)}</span>
+      </div>
+      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota ~${fmtS(cuota)}/mes · ${months} meses`:""}</div>
+      ${(paidA>0||paidB>0)?`<div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #64b5f622;"><div style="font-size:9px;color:#64b5f6;font-family:monospace;text-transform:uppercase;">${d.names.A} ha puesto</div><div style="font-size:13px;font-weight:700;color:#64b5f6;font-family:monospace;">${fmtS(paidA)}</div></div>
+        <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #ff8a6522;"><div style="font-size:9px;color:#ff8a65;font-family:monospace;text-transform:uppercase;">${d.names.B} ha puesto</div><div style="font-size:13px;font-weight:700;color:#ff8a65;font-family:monospace;">${fmtS(paidB)}</div></div>
+      </div>`:""}
+      ${pays.length>0?`<div style="margin-bottom:8px;"><span style="font-size:11px;color:#4db6ac;cursor:pointer;font-family:monospace;" onclick="debtExpandedId=${isExp?"null":de.id};render()">${isExp?"▲ ocultar":"▾ ver"} ${pays.length} pago${pays.length!==1?"s":""}</span>
+        ${isExp?pays.map(p=>`<div style="display:flex;justify-content:space-between;padding:3px 0 3px 8px;border-left:2px solid #4db6ac33;margin-top:3px;"><span style="font-size:10px;color:#6060a0;font-family:monospace;">${p.date}${p.paidBy?" · "+nm(p.paidBy):""}${p.note?" · "+p.note:""}</span><span style="font-size:10px;color:#4caf80;font-family:monospace;">${fmtS(p.amount)}</span></div>`).join(""):""}
+      </div>`:""}`;
+    if(settled){
+      html+=`<div style="font-size:12px;color:#4caf80;text-align:center;padding:4px;">✅ Deuda saldada</div></div>`;
+      return;
+    }
     if(isQp){
       html+=`<div style="background:#0e0e1a;border-radius:8px;padding:10px 12px;border:1px solid #c9a22733;margin-top:4px;">
         <label class="fl" style="margin-bottom:4px;">Cuenta / banco <span style="color:#3a3a5a;font-weight:400;">(opcional)</span></label>
@@ -1606,6 +1644,97 @@ function doExportCSV(){
   const a=document.createElement("a");a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(csv);a.download=`finanzas-${today()}.csv`;a.click();
 }
 
+// Comprehensive human-readable report — for auditing anomalies, duplicates, misreads.
+function doExportReport(){
+  const d=D();
+  const L=[];
+  const money=n=>fmt(n||0);
+  const E=d.entries||[];
+  L.push(`# Informe financiero — ${d.names.A} & ${d.names.B}`);
+  L.push(`Generado: ${today()} · División ${d.split.A}/${d.split.B}`);
+  L.push("");
+  // Balance summary
+  const netA=computeBalance(d);
+  const activeLoans=(d.loans||[]).filter(l=>l.status==="active");
+  const netLoanA=activeLoans.reduce((s,l)=>l.from==="A"?s+(l.amount-l.paid):s-(l.amount-l.paid),0);
+  L.push(`## Resumen de balance`);
+  L.push(`- Gastos compartidos: ${Math.abs(netA)<1?"al día":(netA>0?d.names.B+" debe "+money(netA)+" a "+d.names.A:d.names.A+" debe "+money(-netA)+" a "+d.names.B)}`);
+  L.push(`- Préstamos: ${Math.abs(netLoanA)<1?"al día":(netLoanA>0?d.names.B+" debe "+money(netLoanA)+" a "+d.names.A:d.names.A+" debe "+money(-netLoanA)+" a "+d.names.B)}`);
+  L.push("");
+  // Debts ledger
+  const debts=E.filter(e=>e.type==="debt");
+  L.push(`## Deudas y proyectos (${debts.length})`);
+  debts.forEach(de=>{
+    const pays=paymentsForDebt(d,de);
+    const paid=pays.reduce((s,p)=>s+(p.amount||0),0);
+    const pending=Math.max(0,de.amount-paid);
+    const months=de.debtMonths||1;
+    const paidA=de.user==="shared"?pays.filter(p=>p.paidBy==="A").reduce((s,p)=>s+p.amount,0):(de.user==="A"?paid:0);
+    const paidB=de.user==="shared"?pays.filter(p=>p.paidBy==="B").reduce((s,p)=>s+p.amount,0):(de.user==="B"?paid:0);
+    L.push(`### ${de.description} ${de.user==="shared"?"(compartida)":"("+nm(de.user)+")"}`);
+    L.push(`- Total ${money(de.amount)} · Pagado ${money(paid)} · Pendiente ${money(pending)}${pending<1&&paid>0?" ✅ SALDADA":""}`);
+    L.push(`- ${months>1?months+" cuotas (~"+money(Math.round(de.amount/months))+"/mes)":"pago único"} · inicio ${de.debtStart||de.date||"?"}`);
+    L.push(`- Aporte: ${d.names.A} ${money(paidA)} · ${d.names.B} ${money(paidB)}`);
+    pays.forEach(p=>L.push(`  - ${p.date} · ${money(p.amount)}${p.paidBy?" · "+nm(p.paidBy):""}${p.note?" · "+p.note:""}`));
+    L.push("");
+  });
+  // Loans
+  L.push(`## Préstamos (${(d.loans||[]).length})`);
+  (d.loans||[]).forEach(l=>{
+    L.push(`### ${l.description} · ${nm(l.from)} → ${nm(l.to)} [${l.status}]`);
+    L.push(`- Total ${money(l.amount)} · Pagado ${money(l.paid)} · Pendiente ${money(l.amount-l.paid)} · ${l.installments||1} cuotas`);
+    (l.payments||[]).forEach(p=>L.push(`  - ${p.date} · ${money(p.amount)}`));
+    L.push("");
+  });
+  // Viajes
+  L.push(`## Viajes (${(d.viajes||[]).length})`);
+  (d.viajes||[]).forEach(v=>{
+    const vIds=v.entries||[];
+    const vE=E.filter(e=>e.type==="expense"&&(vIds.includes(e.id)||vIds.includes(Number(e.id))));
+    const sh=vE.filter(e=>e.user==="shared").reduce((s,e)=>s+e.amount,0);
+    L.push(`### ✈️ ${v.name} (${v.date}) — ${vE.length} gastos, total ${money(vE.reduce((s,e)=>s+e.amount,0))}, compartido ${money(sh)}`);
+  });
+  L.push("");
+  // Recurring
+  L.push(`## Recurrentes (${(d.recurring||[]).length})`);
+  (d.recurring||[]).forEach(r=>{
+    L.push(`- [${r.type}] ${r.description} · ${r.user==="shared"?"compartido":nm(r.user)} · ${money(r.amount)}${r.debtMonths>1?" · "+r.debtMonths+" meses":""}${(r.overrides&&Object.keys(r.overrides).length)?" · "+Object.keys(r.overrides).length+" ajustes":""}`);
+  });
+  L.push("");
+  // Anomaly checks
+  L.push(`## ⚠️ Posibles anomalías`);
+  const anomalies=[];
+  E.filter(e=>e.type==="expense"&&e.user==="shared"&&!e.paidBy).forEach(e=>anomalies.push(`Gasto compartido sin pagador: "${e.description}" ${e.date} ${money(e.amount)}`));
+  // Duplicates: same date+amount+description
+  const seen={};
+  E.forEach(e=>{const k=e.date+"|"+e.amount+"|"+e.description;if(seen[k])anomalies.push(`Posible duplicado: "${e.description}" ${e.date} ${money(e.amount)}`);seen[k]=true;});
+  // Debt vs recurring name-match with divergent amounts/months
+  debts.forEach(de=>{
+    (d.recurring||[]).forEach(r=>{
+      const nameMatch=(r.description||"").replace(/[^a-zA-Z0-9]/g,"").toLowerCase()===(de.description||"").replace(/[^a-zA-Z0-9]/g,"").toLowerCase();
+      if(nameMatch&&(r.amount!==de.amount||r.debtMonths!==de.debtMonths))anomalies.push(`Deuda "${de.description}" difiere entre registro (${money(de.amount)}/${de.debtMonths}m) y recurrente (${money(r.amount)}/${r.debtMonths}m)`);
+    });
+  });
+  // Future-dated debts
+  debts.forEach(de=>{if((de.debtStart||"")>today())anomalies.push(`Deuda con fecha de inicio futura: "${de.description}" inicia ${de.debtStart}`);});
+  // Overpaid debts
+  debts.forEach(de=>{const paid=paymentsForDebt(d,de).reduce((s,p)=>s+p.amount,0);if(paid>de.amount+1)anomalies.push(`Deuda sobrepagada: "${de.description}" pagado ${money(paid)} > total ${money(de.amount)}`);});
+  if(anomalies.length===0)L.push("- Ninguna detectada");
+  else anomalies.forEach(a=>L.push(`- ${a}`));
+  L.push("");
+  // Full entries
+  L.push(`## Todos los movimientos (${E.length})`);
+  L.push("| Fecha | Tipo | Quién | Categoría | Descripción | Monto | Pagó |");
+  L.push("|---|---|---|---|---|---|---|");
+  [...E].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).forEach(e=>{
+    L.push(`| ${e.date} | ${e.type} | ${nm(e.user)} | ${e.category||""} | ${(e.description||"").replace(/\|/g,"/")} | ${money(e.amount)} | ${e.paidBy?nm(e.paidBy):""} |`);
+  });
+  const md=L.join("\n");
+  const a=document.createElement("a");a.href="data:text/markdown;charset=utf-8,"+encodeURIComponent(md);a.download=`informe-finanzas-${today()}.md`;a.click();
+  if(navigator.clipboard)navigator.clipboard.writeText(md).then(()=>showToast("✓ Informe descargado y copiado")).catch(()=>showToast("✓ Informe descargado"));
+  else showToast("✓ Informe descargado");
+}
+
 function doSaldarFromBtn(btn){const cat=decodeURIComponent(btn.dataset.cat||"");const amt=parseFloat(btn.dataset.am);const from=btn.dataset.fr;const to=btn.dataset.to;if(cat)doSaldarCategoria(cat,amt,from,to);}
 async function doSaldarCategoria(cat,amt,from,to){
   const d=D();
@@ -1698,10 +1827,10 @@ async function doQuickPayDebt(id){
   if(amtA<=0&&amtB<=0){showToast("⚠️ Ingresa al menos un monto");return;}
   const newEntries=[];
   if(de.user==="shared"){
-    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:"shared",category:de.category,description:"Cuota "+de.description,amount:amtA,paidBy:"A",note,isRecurring:false,registeredBy:"A"});
-    if(amtB>0)newEntries.push({id:Date.now()+1,date:today(),type:"expense",user:"shared",category:de.category,description:"Cuota "+de.description,amount:amtB,paidBy:"B",note,isRecurring:false,registeredBy:"B"});
+    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:"shared",category:de.category,description:"Cuota "+de.description,amount:amtA,paidBy:"A",note,isRecurring:false,registeredBy:"A",debtId:de.id});
+    if(amtB>0)newEntries.push({id:Date.now()+1,date:today(),type:"expense",user:"shared",category:de.category,description:"Cuota "+de.description,amount:amtB,paidBy:"B",note,isRecurring:false,registeredBy:"B",debtId:de.id});
   }else{
-    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:de.user,category:de.category,description:"Cuota "+de.description,amount:amtA,paidBy:null,note,isRecurring:false,registeredBy:de.user});
+    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:de.user,category:de.category,description:"Cuota "+de.description,amount:amtA,paidBy:null,note,isRecurring:false,registeredBy:de.user,debtId:de.id});
   }
   const totalPaid=amtA+amtB;
   const netA=de.user==="shared"?amtA-totalPaid*(sp.A/100):0;
@@ -1722,13 +1851,16 @@ async function doPayCuotaFromProj(recId,amtA,amtB){
   const r=(d.recurring||[]).find(x=>x.id===rid);
   if(!r)return;
   const sp=d.split||{A:50,B:50};
+  // Link to matching debt entry (same category+description) so it counts on the Deudas ledger.
+  const de=(d.entries||[]).find(e=>e.type==="debt"&&e.category===r.category&&e.description===r.description);
+  const dId=de?de.id:null;
   const newEntries=[];
   if(r.user==="shared"){
-    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:"shared",category:r.category,description:"Cuota "+r.description,amount:amtA,paidBy:"A",note:null,isRecurring:false,registeredBy:"A"});
-    if(amtB>0)newEntries.push({id:Date.now()+1,date:today(),type:"expense",user:"shared",category:r.category,description:"Cuota "+r.description,amount:amtB,paidBy:"B",note:null,isRecurring:false,registeredBy:"B"});
+    if(amtA>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:"shared",category:r.category,description:"Cuota "+r.description,amount:amtA,paidBy:"A",note:null,isRecurring:false,registeredBy:"A",debtId:dId});
+    if(amtB>0)newEntries.push({id:Date.now()+1,date:today(),type:"expense",user:"shared",category:r.category,description:"Cuota "+r.description,amount:amtB,paidBy:"B",note:null,isRecurring:false,registeredBy:"B",debtId:dId});
   }else{
     const amt=amtA||amtB;
-    if(amt>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:r.user,category:r.category,description:"Cuota "+r.description,amount:amt,paidBy:null,note:null,isRecurring:false,registeredBy:r.user});
+    if(amt>0)newEntries.push({id:Date.now(),date:today(),type:"expense",user:r.user,category:r.category,description:"Cuota "+r.description,amount:amt,paidBy:null,note:null,isRecurring:false,registeredBy:r.user,debtId:dId});
   }
   if(newEntries.length===0){showToast("⚠️ Montos son cero");return;}
   await persist({...d,entries:[...(d.entries||[]),...newEntries]});
