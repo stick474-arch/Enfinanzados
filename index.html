@@ -2062,6 +2062,7 @@ function buildProjection(d,n){
     const date=new Date(now.getFullYear(),now.getMonth()+i,1);
     const key=moKey(date.getFullYear(),date.getMonth()+1);
     let income=0,expenses=0,shareA=0,shareB=0; // shareA/B = what each person puts toward shared outflows
+    let shTotal=0,shA=0; // shared-only: total shared outflow + A's shared contribution (for balance projection)
     // Recurring items
     (d.recurring||[]).forEach(r=>{
       const ov=(r.overrides&&r.overrides[key]!=null)?r.overrides[key]:null;
@@ -2081,7 +2082,7 @@ function buildProjection(d,n){
         expenses+=amt;
         if(r.user==="shared"){
           const s=recSplitForMonth(r,key,r.type==="debt"&&(r.debtMonths||0)>1?Math.round(r.amount/r.debtMonths):r.amount,sp);
-          shareA+=s.a;shareB+=s.b;
+          shareA+=s.a;shareB+=s.b;shTotal+=amt;shA+=s.a;
         }else if(r.user==="A")shareA+=amt;else if(r.user==="B")shareB+=amt;
       }else income+=amt;
     });
@@ -2095,10 +2096,11 @@ function buildProjection(d,n){
       if(recDebtCats.has(e.category+"|"+(e.description||"")))return;
       const monthly=Math.round(e.amount/(e.debtMonths));
       expenses+=monthly;
-      if(e.user==="shared"){const a=Math.round(monthly*sp.A/100);shareA+=a;shareB+=monthly-a;}
+      if(e.user==="shared"){const a=Math.round(monthly*sp.A/100);shareA+=a;shareB+=monthly-a;shTotal+=monthly;shA+=a;}
       else if(e.user==="A")shareA+=monthly;else if(e.user==="B")shareB+=monthly;
     });
-    rows.push({key,mo:String(date.getMonth()+1).padStart(2,"0"),income,expenses,net:income-expenses,shareA,shareB});
+    const advA=Math.round(shA-shTotal*(sp.A/100)); // >0: A pays above fair share this month (B owes A more)
+    rows.push({key,mo:String(date.getMonth()+1).padStart(2,"0"),income,expenses,net:income-expenses,shareA,shareB,advA});
   }
   return rows;
 }
@@ -2221,14 +2223,26 @@ function renderProyeccion(){
   const totalIncome=proj.reduce((s,p)=>s+p.income,0);
   const totalExpenses=proj.reduce((s,p)=>s+p.expenses,0);
   const avgNet=(totalIncome-totalExpenses)/projMonths;
+  // Running projected shared-expense balance (who owes whom) as the plan is paid.
+  const startBal=computeBalance(d); // >0: John(B) debe a Marce(A); <0: Marce debe a John
+  let runBal=startBal;
+  proj.forEach(p=>{runBal+=(p.advA||0);p.projBal=runBal;});
+  const endBal=proj.length?proj[proj.length-1].projBal:startBal;
+  const balWho=b=>Math.abs(b)<1?"equilibrado":(b>0?`${d.names.B} debe a ${d.names.A}`:`${d.names.A} debe a ${d.names.B}`);
+  const balCol=b=>Math.abs(b)<1?"#4caf80":(b>0?"#64b5f6":"#ff8a65");
+  const moves=Math.abs(endBal-startBal)>1;
   const chart=buildProjChart(proj);
   const statsHtml=`
     <div style="display:flex;justify-content:space-around;margin-bottom:14px;text-align:center;">
       <div><div class="fl">Ingresos prom/mes</div><div style="font-size:17px;font-weight:700;color:#4caf80;">${fmtS(totalIncome/projMonths)}</div></div>
       <div style="width:1px;background:#1e1e3a;"></div>
-      <div><div class="fl">Egresos prom/mes</div><div style="font-size:17px;font-weight:700;color:#ef5350;">${fmtS(totalExpenses/projMonths)}</div></div>
-      <div style="width:1px;background:#1e1e3a;"></div>
-      <div><div class="fl">Flujo neto prom</div><div style="font-size:17px;font-weight:700;color:${avgNet>=0?"#4caf80":"#ef5350"};">${fmtS(avgNet)}</div></div>
+      <div><div class="fl">Egresos prom/mes</div><div style="font-size:17px;font-weight:700;color:${avgNet>=0?"#4caf80":"#ef5350"};">${fmtS(avgNet)}</div></div>
+    </div>
+    <div style="background:#0e0e1a;border:1px solid #1e1e3a;border-radius:10px;padding:10px 12px;margin-bottom:14px;">
+      <div class="row" style="margin-bottom:4px;"><span style="font-size:11px;color:#8080a0;">Balance hoy</span><span style="font-size:12px;font-weight:700;font-family:monospace;color:${balCol(startBal)};">${Math.abs(startBal)<1?"equilibrado ✓":fmt(Math.abs(startBal))}</span></div>
+      <div class="row"><span style="font-size:11px;color:#8080a0;">Balance proyectado (${proj.length} meses)</span><span style="font-size:14px;font-weight:700;font-family:monospace;color:${balCol(endBal)};">${Math.abs(endBal)<1?"equilibrado ✓":fmt(Math.abs(endBal))}</span></div>
+      <div style="font-size:10px;color:#6060a0;font-family:monospace;margin-top:4px;">${balWho(endBal)}${moves?"":" · el plan actual reparte 50/50 (no cambia el saldo)"}</div>
+      <div style="font-size:10px;color:#4a4a6a;margin-top:6px;line-height:1.5;">💡 Si quieres que uno pague de más en cierta deuda (ej: tú el apto, Marce el parqueadero), edita "cuánto pone cada uno" por mes abajo — el saldo proyectado lo reflejará.</div>
     </div>`;
   const tableRows=proj.map(p=>`
     <tr>
@@ -2238,6 +2252,7 @@ function renderProyeccion(){
       <td style="font-family:monospace;font-size:11px;color:#64b5f6;text-align:right;padding:4px 6px;white-space:nowrap;">${fmt(p.shareA)}</td>
       <td style="font-family:monospace;font-size:11px;color:#ff8a65;text-align:right;padding:4px 6px;white-space:nowrap;">${fmt(p.shareB)}</td>
       <td style="font-family:monospace;font-size:13px;font-weight:600;text-align:right;padding:4px 6px;color:${p.net>=0?"#4caf80":"#ef5350"};white-space:nowrap;">${fmt(p.net)}</td>
+      <td style="font-family:monospace;font-size:11px;text-align:right;padding:4px 6px;white-space:nowrap;color:${balCol(p.projBal)};" title="${balWho(p.projBal)}">${Math.abs(p.projBal)<1?"—":fmt(Math.abs(p.projBal))}</td>
     </tr>`).join("");
   const tableHtml=`
     <div style="overflow-x:auto;margin-top:10px;border-top:1px solid #1e1e3a;padding-top:10px;">
@@ -2248,10 +2263,12 @@ function renderProyeccion(){
           <th style="text-align:right;font-family:monospace;font-size:9px;color:#ef5350;text-transform:uppercase;padding-bottom:6px;">Egresos</th>
           <th style="text-align:right;font-family:monospace;font-size:9px;color:#64b5f6;text-transform:uppercase;padding-bottom:6px;">Pone ${d.names.A}</th>
           <th style="text-align:right;font-family:monospace;font-size:9px;color:#ff8a65;text-transform:uppercase;padding-bottom:6px;">Pone ${d.names.B}</th>
-          <th style="text-align:right;font-family:monospace;font-size:9px;color:#c9a227;text-transform:uppercase;padding-bottom:6px;padding-right:6px;">Flujo</th>
+          <th style="text-align:right;font-family:monospace;font-size:9px;color:#c9a227;text-transform:uppercase;padding-bottom:6px;">Flujo</th>
+          <th style="text-align:right;font-family:monospace;font-size:9px;color:#8080a0;text-transform:uppercase;padding-bottom:6px;padding-right:6px;">Saldo</th>
         </tr></thead>
         <tbody>${tableRows}</tbody>
       </table>
+      <div style="font-size:9px;color:#4a4a6a;font-family:monospace;margin-top:8px;line-height:1.5;">Saldo = quién queda debiendo tras pagar el plan de ese mes · <span style="color:#64b5f6;">azul: le deben a ${d.names.A}</span> · <span style="color:#ff8a65;">naranja: le deben a ${d.names.B}</span></div>
     </div>`;
   const recItems=d.recurring||[];
   const varItemsHtml=recItems.length===0?
