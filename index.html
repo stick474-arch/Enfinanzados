@@ -239,6 +239,10 @@ let lastSeenCount=parseInt(localStorage.getItem("lastSeenCount")||"0");
 let newLoan={from:"A",to:"B",amount:"",description:"",date:today(),installments:1,note:""};
 let newGoal={name:"",target:"",current:"",deadline:""};
 let newBudget={category:"",amount:""};
+let editLoanId=null;
+let editGoalId=null;
+let editViajeId=null;
+let editViaje={name:"",date:today(),desc:""};
 let newCat={type:"shared",name:""};
 let splitVal=50;
 let editCatIdx=null;
@@ -517,23 +521,28 @@ function renderBalanceDetail(d){
       <div style="font-size:9px;color:#4db6ac;font-family:monospace;text-transform:uppercase;margin-bottom:4px;">Abonos y saldos registrados</div>
       ${allPayments.map(p=>`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#4db6ac;font-family:monospace;">${p.date} · ${p.from}→${p.to}${p.note?(" · "+p.note):""}</span><span style="font-size:10px;color:#4db6ac;font-family:monospace;">-${fmt(p.amount)}</span></div>`).join("")}
     </div>`:"";
-  // Viaje contributions — so user can see which trips feed into the shared balance
-  const viajeBkd=(d.viajes||[]).map(v=>{
-    const vIds=v.entries||[];
-    const vE=(d.entries||[]).filter(e=>e.type==="expense"&&(vIds.includes(e.id)||vIds.includes(Number(e.id))));
-    const shT=vE.filter(e=>e.user==="shared").reduce((s,e)=>s+e.amount,0);
-    const pA=vE.filter(e=>e.user==="shared"&&e.paidBy==="A").reduce((s,e)=>s+e.amount,0);
-    const vBalA=pA-(shT*spA);
-    return shT>0?{name:v.name,vBalA}:null;
-  }).filter(Boolean);
-  const viajeHtml=viajeBkd.length>0?`
+  // Consolidado por proyecto (categoría): cuánto adelantó cada quién, y cómo se compensan.
+  const byCat={};
+  shExp.forEach(e=>{
+    const k=e.category||"Otro";
+    if(!byCat[k])byCat[k]={total:0,paidA:0};
+    byCat[k].total+=e.amount;
+    if(e.paidBy==="A")byCat[k].paidA+=e.amount;
+  });
+  const catRows=Object.entries(byCat).map(([k,v])=>({k,advA:Math.round(v.paidA-v.total*spA)}))
+    .filter(x=>Math.abs(x.advA)>1).sort((a,b)=>Math.abs(b.advA)-Math.abs(a.advA));
+  const netExp=catRows.reduce((s,x)=>s+x.advA,0); // >0: Marce adelantó (John le debe)
+  const consolidadoHtml=catRows.length>0?`
     <div style="border-top:1px solid #1e1e3a22;margin-top:6px;padding-top:6px;">
-      <div style="font-size:9px;color:#c9a227;font-family:monospace;text-transform:uppercase;margin-bottom:4px;">✈️ Contribución por viaje (incluidos arriba)</div>
-      ${viajeBkd.map(x=>{const who=x.vBalA>0?(d.names.B+" debe a "+d.names.A):(d.names.A+" debe a "+d.names.B);return`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#c9a227;font-family:monospace;">✈️ ${x.name} · ${who}</span><span style="font-size:10px;color:#c9a227;font-family:monospace;">${fmt(Math.abs(x.vBalA))}</span></div>`;}).join("")}
+      <div style="font-size:9px;color:#c9a227;font-family:monospace;text-transform:uppercase;margin-bottom:4px;">⚖️ Adelantos por proyecto (se compensan entre sí)</div>
+      ${catRows.map(x=>{const who=x.advA>0?d.names.A:d.names.B;const col=x.advA>0?"#64b5f6":"#ff8a65";return`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#8080a0;font-family:monospace;">${icon(x.k)} ${x.k}</span><span style="font-size:10px;color:${col};font-family:monospace;">${who} adelantó ${fmt(Math.abs(x.advA))}</span></div>`;}).join("")}
+      <div style="display:flex;justify-content:space-between;padding:5px 0 0;margin-top:3px;border-top:1px solid #2a2040;"><span style="font-size:10px;color:#f0eff4;font-family:monospace;font-weight:700;">NETO tras compensar</span><span style="font-size:10px;color:#c9a227;font-family:monospace;font-weight:700;">${Math.abs(netExp)<1?"equilibrado ✓":(netExp>0?d.names.B+" debe "+fmt(netExp):d.names.A+" debe "+fmt(-netExp))}</span></div>
     </div>`:"";
-  return`<div style="background:#0e0e1a;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:300px;overflow-y:auto;border:1px solid #1e1e3a;">
+  return`<div style="background:#0e0e1a;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:340px;overflow-y:auto;border:1px solid #1e1e3a;">
     <div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin-bottom:6px;">Detalle · cada gasto y quién debe a quién</div>
-    ${rows}${moreNote}${paymentsHtml}${viajeHtml}
+    ${consolidadoHtml}
+    <div style="font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;margin:8px 0 4px;">Movimientos</div>
+    ${rows}${moreNote}${paymentsHtml}
   </div>`;
 }
 
@@ -838,12 +847,24 @@ function renderViajes(){
 
     // Header card
     html+="<div class=\"card card-gold\">";
-    html+="<div style=\"display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;\">";
-    html+="<div><div style=\"font-size:18px;font-weight:700;color:#c9a227;\">✈️ "+v.name+"</div>";
-    if(v.desc)html+="<div style=\"font-size:12px;color:#4a4a6a;margin-top:2px;\">"+v.desc+"</div>";
-    html+="<div style=\"font-size:11px;color:#4a4a6a;font-family:monospace;margin-top:4px;\">"+v.date+"</div></div>";
-    html+="<span style=\"font-size:"+(confirmDelete&&confirmDelete.type==="viaje"&&confirmDelete.id===v.id?11:14)+"px;cursor:pointer;color:#ef5350;font-family:monospace;\" onclick=\"doDeleteViajeConfirm("+v.id+")\">"+(confirmDelete&&confirmDelete.type==="viaje"&&confirmDelete.id===v.id?"¿Eliminar?":"🗑️")+"</span>";
-    html+="</div>";
+    if(editViajeId===v.id){
+      html+="<div style=\"margin-bottom:8px;\">";
+      html+="<label class=\"fl\">Nombre</label><input type=\"text\" value=\""+(editViaje.name||"").replace(/\"/g,"&quot;")+"\" oninput=\"editViaje.name=this.value\"/>";
+      html+="<label class=\"fl\">Descripción</label><input type=\"text\" value=\""+(editViaje.desc||"").replace(/\"/g,"&quot;")+"\" oninput=\"editViaje.desc=this.value\"/>";
+      html+="<label class=\"fl\">Fecha</label><input type=\"date\" value=\""+editViaje.date+"\" onchange=\"editViaje.date=this.value\"/>";
+      html+="<div style=\"display:flex;gap:8px;\"><button class=\"btn btn-green\" style=\"margin:0;flex:1;\" onclick=\"doSaveViajeEdit("+v.id+")\">💾 Guardar</button><button class=\"btn btn-dark\" style=\"margin:0;width:48px;\" onclick=\"editViajeId=null;render()\">✕</button></div>";
+      html+="</div>";
+    }else{
+      html+="<div style=\"display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;\">";
+      html+="<div><div style=\"font-size:18px;font-weight:700;color:#c9a227;\">✈️ "+v.name+"</div>";
+      if(v.desc)html+="<div style=\"font-size:12px;color:#4a4a6a;margin-top:2px;\">"+v.desc+"</div>";
+      html+="<div style=\"font-size:11px;color:#4a4a6a;font-family:monospace;margin-top:4px;\">"+v.date+"</div></div>";
+      html+="<span style=\"display:flex;gap:10px;align-items:center;flex-shrink:0;\">";
+      html+="<span style=\"font-size:14px;cursor:pointer;\" onclick=\"doEditViaje("+v.id+")\">✏️</span>";
+      html+="<span style=\"font-size:"+(confirmDelete&&confirmDelete.type==="viaje"&&confirmDelete.id===v.id?11:14)+"px;cursor:pointer;color:#ef5350;font-family:monospace;\" onclick=\"doDeleteViajeConfirm("+v.id+")\">"+(confirmDelete&&confirmDelete.type==="viaje"&&confirmDelete.id===v.id?"¿Eliminar?":"🗑️")+"</span>";
+      html+="</span>";
+      html+="</div>";
+    }
     html+="<div style=\"display:flex;justify-content:space-around;margin:10px 0;\">";
     html+="<div style=\"text-align:center;\"><div style=\"font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;\">TOTAL</div><div style=\"font-size:16px;font-weight:700;color:#c9a227;\">"+fmtS(total)+"</div></div>";
     html+="<div style=\"width:1px;background:#1e1e3a;\"></div>";
@@ -982,9 +1003,9 @@ function renderPrestamos(){
         <div style="text-align:center;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:3px;">LE DEBEN A ${d.names.B.toUpperCase()}</div><div style="font-size:17px;font-weight:700;color:#ff8a65;">${fmtS(oB)}</div></div>
       </div>
     </div>`:""}
-    <button class="btn" onclick="showNewLoan=!showNewLoan;render()">${showNewLoan?"✕ Cancelar":"🤝 Registrar nuevo préstamo"}</button>
+    <button class="btn" onclick="showNewLoan=!showNewLoan;if(!showNewLoan){editLoanId=null;newLoan={from:'A',to:'B',amount:'',description:'',date:today(),installments:1,note:''};}render()">${showNewLoan?"✕ Cancelar":"🤝 Registrar nuevo préstamo"}</button>
     ${showNewLoan?`<div class="card" style="border:1px solid #c9a22744;">
-      <div class="ct">Nuevo préstamo</div>
+      <div class="ct">${editLoanId?"Editar préstamo":"Nuevo préstamo"}</div>
       <label class="fl">¿Quién presta?</label>
       <div class="chips">
         <div class="chip${newLoan.from==="A"?" on":""}" onclick="newLoan.from='A';newLoan.to='B';render()">${d.names.A}</div>
@@ -1004,7 +1025,7 @@ function renderPrestamos(){
       <input type="date" value="${newLoan.date}" onchange="newLoan.date=this.value"/>
       <label class="fl">Nota</label>
       <input type="text" placeholder="Condiciones, detalles…" value="${newLoan.note||""}" oninput="newLoan.note=this.value"/>
-      <button class="btn" onclick="doAddLoan()" ${saving?"disabled":""}>✓ Registrar préstamo</button>
+      <button class="btn" onclick="doAddLoan()" ${saving?"disabled":""}>${editLoanId?"💾 Guardar cambios":"✓ Registrar préstamo"}</button>
     </div>`:""}
     ${active.length===0&&!showNewLoan?`<div style="text-align:center;color:#4a4a6a;margin-top:40px;font-size:14px;"><div style="font-size:40px;margin-bottom:12px;">🤝</div>Sin préstamos activos</div>`:""}
     ${active.map(loan=>{
@@ -1043,7 +1064,8 @@ function renderPrestamos(){
           <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">HISTORIAL DE PAGOS</div>
           ${(loan.payments||[]).slice().reverse().map(p=>`<div class="row" style="margin-bottom:4px;"><span style="font-size:11px;color:#6060a0;font-family:monospace;">${p.date}</span><span style="font-size:11px;color:#4caf80;font-family:monospace;">+${fmt(p.amount)}</span></div>`).join("")}
         </div>`:""}
-        <div style="margin-top:10px;text-align:right;">
+        <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:14px;">
+          <span style="font-size:11px;cursor:pointer;color:#64b5f6;font-family:monospace;" onclick="doEditLoan('${loan.id}')">✏️ editar</span>
           <span style="font-size:11px;cursor:pointer;color:${confirmDelete&&confirmDelete.type==="loan"&&confirmDelete.id===loan.id?"#ef5350":"#4a4a6a"};font-family:monospace;" onclick="doDeleteLoan('${loan.id}')">${confirmDelete&&confirmDelete.type==="loan"&&confirmDelete.id===loan.id?"¿Eliminar? Toca de nuevo":"🗑️ eliminar"}</span>
         </div>
       </div>`;}).join("")}
@@ -1373,17 +1395,18 @@ function renderAjustes(){
     ${settingsTab==="goals"?`<div>
       <div class="help-box">🎯 <strong style="color:#c9a227;">Metas de ahorro</strong>: define un objetivo con nombre, monto y fecha límite. Actualiza el campo <em>Ahorrado</em> cuando aporten dinero. El progreso aparece en Inicio.</div>
       <div class="card">
-        <div class="ct">Nueva meta</div>
+        <div class="ct">${editGoalId?"Editar meta":"Nueva meta"}</div>
         <label class="fl">Nombre</label><input id="g-name" type="text" placeholder="Ej: Vacaciones, Carro…" value="${newGoal.name||""}"/>
         <label class="fl">Meta (COP)</label><input class="inp-big" id="g-target" type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(newGoal.target)}" oninput="fmtAmountInput(this,v=>newGoal.target=v)"/>
         <label class="fl">Ahorrado hasta ahora</label><input id="g-current" type="text" inputmode="numeric" placeholder="0" value="${fmtInit(newGoal.current)}" oninput="fmtAmountInput(this,v=>newGoal.current=v)"/>
         <label class="fl">Fecha límite</label><input id="g-deadline" type="date" value="${newGoal.deadline||""}"/>
-        <button class="btn" onclick="doAddGoal()">+ Crear meta</button>
+        <button class="btn" onclick="doAddGoal()">${editGoalId?"💾 Guardar cambios":"+ Crear meta"}</button>
+        ${editGoalId?`<button class="btn btn-dark" onclick="editGoalId=null;newGoal={name:'',target:'',current:'',deadline:''};render()">Cancelar edición</button>`:""}
       </div>
       ${(d.goals||[]).map(g=>{
         const pct=Math.min(100,g.current/g.target*100);
         return`<div class="card">
-          <div class="row" style="margin-bottom:8px;"><span style="font-size:15px;font-weight:700;">${g.name}</span><span style="font-size:14px;cursor:pointer;" onclick="doDeleteGoal('${g.id}')">🗑️</span></div>
+          <div class="row" style="margin-bottom:8px;"><span style="font-size:15px;font-weight:700;">${g.name}</span><span style="display:flex;gap:12px;"><span style="font-size:14px;cursor:pointer;" onclick="doEditGoal('${g.id}')">✏️</span><span style="font-size:14px;cursor:pointer;" onclick="doDeleteGoal('${g.id}')">🗑️</span></span></div>
           <div class="row" style="margin-bottom:8px;"><span style="font-family:monospace;font-size:12px;color:#c9a227;">${fmt(g.current)}</span><span style="font-family:monospace;font-size:12px;color:#4a4a6a;">/ ${fmt(g.target)}</span></div>
           <div class="bar-wrap"><div class="bar" style="width:${pct}%;background:${pct>=100?"#4caf80":"#c9a227"};box-shadow:0 0 8px ${pct>=100?"#4caf8060":"#c9a22760"};"></div></div>
           <label class="fl" style="margin-top:8px;">Actualizar ahorrado</label>
@@ -1397,7 +1420,7 @@ function renderAjustes(){
         <label class="fl">Categoría</label>
         <select id="budget-cat" style="margin-bottom:10px;" onchange="newBudget.category=this.value">
           <option value="">Selecciona…</option>
-          ${[...(d.cats.shared||[]),...(d.cats.personal||[])].map(c=>`<option value="${c}">${icon(c)} ${c}</option>`).join("")}
+          ${[...(d.cats.shared||[]),...(d.cats.personal||[])].map(c=>`<option value="${c}"${newBudget.category===c?" selected":""}>${icon(c)} ${c}</option>`).join("")}
         </select>
         <label class="fl">Límite mensual (COP)</label>
         <input class="inp-big" id="budget-amt" type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(newBudget.amount)}" oninput="fmtAmountInput(this,v=>newBudget.amount=v)"/>
@@ -1412,7 +1435,7 @@ function renderAjustes(){
           const pct=Math.min(100,sp2/lim*100);
           const color=pct>=100?"#ef5350":pct>=70?"#c9a227":"#4caf80";
           return`<div style="margin-bottom:14px;">
-            <div class="row"><span style="font-size:13px;">${icon(cat)} ${cat}</span><div style="display:flex;gap:8px;align-items:center;"><span style="font-size:11px;color:${color};font-family:monospace;">${fmt(sp2)}/${fmt(lim)}</span><span style="font-size:14px;cursor:pointer;" onclick="doDeleteBudget('${cat.replace(/'/g,"\\'")}')">🗑️</span></div></div>
+            <div class="row"><span style="font-size:13px;">${icon(cat)} ${cat}</span><div style="display:flex;gap:10px;align-items:center;"><span style="font-size:11px;color:${color};font-family:monospace;">${fmt(sp2)}/${fmt(lim)}</span><span style="font-size:13px;cursor:pointer;" onclick="doEditBudget('${cat.replace(/'/g,"\\'")}',${lim})">✏️</span><span style="font-size:14px;cursor:pointer;" onclick="doDeleteBudget('${cat.replace(/'/g,"\\'")}')">🗑️</span></div></div>
             <div class="bar-wrap"><div class="bar" style="width:${pct}%;background:${color};box-shadow:0 0 6px ${color}60;"></div></div>
           </div>`;}).join("")}
       </div>`:""}
@@ -1551,10 +1574,24 @@ async function doDeleteRecurring(id){
 async function doAddLoan(){
   if(!newLoan.amount||isNaN(Number(newLoan.amount))){showToast("⚠️ Ingresa un monto");return;}
   const d=D();
+  if(editLoanId){
+    const nl=(d.loans||[]).map(l=>l.id===editLoanId?{...l,from:newLoan.from,to:newLoan.to,amount:Number(newLoan.amount),description:newLoan.description||l.description,date:newLoan.date,installments:Number(newLoan.installments)||1,note:newLoan.note||null,status:(l.paid||0)>=Number(newLoan.amount)?"settled":"active"}:l);
+    await persist({...d,loans:nl});
+    newLoan={from:"A",to:"B",amount:"",description:"",date:today(),installments:1,note:""};
+    editLoanId=null;showNewLoan=false;showToast("✓ Préstamo actualizado");
+    return;
+  }
   const loan={id:Date.now(),from:newLoan.from,to:newLoan.to,amount:Number(newLoan.amount),description:newLoan.description||`Préstamo ${nm(newLoan.from)}→${nm(newLoan.to)}`,date:newLoan.date,installments:Number(newLoan.installments)||1,paid:0,payments:[],note:newLoan.note||null,status:"active"};
   await persist({...d,loans:[...(d.loans||[]),loan]});
   newLoan={from:"A",to:"B",amount:"",description:"",date:today(),installments:1,note:""};
   showNewLoan=false;showToast("✓ Préstamo registrado");
+}
+
+function doEditLoan(id){
+  const d=D();const lid=Number(id)||id;
+  const l=(d.loans||[]).find(x=>x.id===lid);if(!l)return;
+  newLoan={from:l.from,to:l.to,amount:String(l.amount),description:l.description||"",date:l.date,installments:l.installments||1,note:l.note||""};
+  editLoanId=lid;showNewLoan=true;render();
 }
 
 async function doLoanPay(id,amt){
@@ -1622,8 +1659,20 @@ async function doAddGoal(){
   const cVal=(newGoal.current||"").toString().replace(/[^0-9]/g,"");
   if(!name||!name.value||!tVal)return;
   const d=D();
+  if(editGoalId){
+    await persist({...d,goals:(d.goals||[]).map(g=>g.id===editGoalId?{...g,name:name.value,target:Number(tVal),current:Number(cVal||0),deadline:deadline&&deadline.value||""}:g)});
+    newGoal={name:"",target:"",current:"",deadline:""};editGoalId=null;showToast("✓ Meta actualizada");
+    return;
+  }
   await persist({...d,goals:[...(d.goals||[]),{id:Date.now(),name:name.value,target:Number(tVal),current:Number(cVal||0),deadline:deadline&&deadline.value||""}]});
   newGoal={name:"",target:"",current:"",deadline:""};showToast("✓ Meta creada");
+}
+
+function doEditGoal(id){
+  const d=D();const gid=Number(id)||id;
+  const g=(d.goals||[]).find(x=>x.id===gid);if(!g)return;
+  newGoal={name:g.name,target:String(g.target),current:String(g.current),deadline:g.deadline||""};
+  editGoalId=gid;settingsTab="goals";render();
 }
 
 async function doUpdateGoal(id,val){
@@ -1645,6 +1694,11 @@ async function doAddBudget(){
   const d=D();
   await persist({...d,budgets:{...d.budgets,[cat.value]:Number(aVal)}});
   newBudget={category:"",amount:""};showToast("✓ Presupuesto guardado");
+}
+
+function doEditBudget(cat,lim){
+  newBudget={category:cat,amount:String(lim)};
+  settingsTab="budgets";showToast("Edita el monto y guarda");render();
 }
 
 async function doDeleteBudget(cat){
@@ -1776,6 +1830,20 @@ async function doCreateViaje(){
   await persist({...d,viajes:[...(d.viajes||[]),v]});
   newViaje={name:"",date:today(),desc:""};
   showToast("✓ Viaje creado");
+}
+
+function doEditViaje(id){
+  const d=D();const vid=Number(id)||id;
+  const v=(d.viajes||[]).find(x=>x.id===vid);if(!v)return;
+  editViaje={name:v.name,date:v.date,desc:v.desc||""};editViajeId=vid;render();
+}
+
+async function doSaveViajeEdit(id){
+  const vid=Number(id)||id;
+  if(!editViaje.name.trim()){showToast("⚠️ Ponle un nombre");return;}
+  const d=D();
+  await persist({...d,viajes:(d.viajes||[]).map(v=>v.id===vid?{...v,name:editViaje.name.trim(),date:editViaje.date,desc:editViaje.desc||""}:v)});
+  editViajeId=null;showToast("✓ Viaje actualizado");
 }
 
 async function doAssignToViaje(viajeId,entryId,assign){
