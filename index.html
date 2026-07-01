@@ -587,7 +587,7 @@ function renderDebtsCard(debts,d){
         <span style="color:${pending>0?"#ef5350":"#4caf80"};">Falta ${fmtS(pending)}</span>
       </div>
       <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota ~${fmtS(cuota)}/mes · ${months} meses`:""}</div>
-      ${(paidA>0||paidB>0)?`<div style="display:flex;gap:8px;margin-bottom:8px;">
+      ${isShared&&(paidA>0||paidB>0)?`<div style="display:flex;gap:8px;margin-bottom:8px;">
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #64b5f622;"><div style="font-size:9px;color:#64b5f6;font-family:monospace;text-transform:uppercase;">${d.names.A} ha puesto</div><div style="font-size:13px;font-weight:700;color:#64b5f6;font-family:monospace;">${fmtS(paidA)}</div></div>
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #ff8a6522;"><div style="font-size:9px;color:#ff8a65;font-family:monospace;text-transform:uppercase;">${d.names.B} ha puesto</div><div style="font-size:13px;font-weight:700;color:#ff8a65;font-family:monospace;">${fmtS(paidB)}</div></div>
       </div>`:""}
