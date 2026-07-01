@@ -74,7 +74,8 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#c9a227;margin:0;}
   <div class="hdr">
     <div class="row" style="margin-bottom:2px;">
       <h1 id="hdr-title">💑 Finanzas en Pareja</h1>
-      <div style="display:flex;align-items:center;gap:10px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="cursor:pointer;font-size:15px;line-height:1;" title="Deshacer última acción" onclick="doUndo()">↶</span>
         <span style="cursor:pointer;font-size:15px;line-height:1;" title="Exportar informe completo" onclick="doExportReport()">📤</span>
         <span><span class="dot" id="fb-dot" style="background:#ef5350;"></span><span id="fb-lbl" style="font-size:10px;color:#4a4a6a;font-family:monospace;">conectando…</span></span>
       </div>
@@ -100,7 +101,7 @@ function emptyState(){
   return{entries:[],balances:{A:0,B:0},settled:[],names:{A:"Marce",B:"John"},
     cats:{shared:["Casa / Arriendo","Parqueadero","Servicios","Mercado","Deuda banco","Otro compartido"],
     personal:["Transporte","Ropa","Salud","Entretenimiento","Deuda personal","Otro personal"]},
-    goals:[],split:{A:50,B:50},recurring:[],budgets:{},loans:[],viajes:[],catSettled:[]};
+    goals:[],split:{A:50,B:50},recurring:[],budgets:{},loans:[],viajes:[],catSettled:[],trash:[]};
 }
 
 async function loadFromFirebase(){
@@ -119,13 +120,25 @@ async function saveToFirebase(data){
   }catch(e){return false;}
 }
 
+let undoStack=[]; // in-memory snapshots of state BEFORE each mutation (this session)
+
 async function persist(newData){
+  if(localData){undoStack.push(JSON.stringify(localData));if(undoStack.length>30)undoStack.shift();}
   saving=true;localData=newData;
   updateSavingUI(true);
   const ok=await saveToFirebase(newData);
   fbOnline=ok;saving=false;
   updateSavingUI(false);
   render();
+}
+
+async function doUndo(){
+  if(!undoStack.length){showToast("Nada que deshacer");return;}
+  const prev=JSON.parse(undoStack.pop());
+  saving=true;localData=prev;updateSavingUI(true);
+  const ok=await saveToFirebase(prev);
+  fbOnline=ok;saving=false;updateSavingUI(false);
+  showToast("↶ Acción deshecha");render();
 }
 
 function updateSavingUI(s){
@@ -169,7 +182,7 @@ function nm(u){const n=D().names;return u==="A"?n.A:u==="B"?n.B:"Compartido";}
 function D(){return localData||emptyState();}
 function migrate(d){
   const e=emptyState();
-  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled"].forEach(k=>{if(!d[k])d[k]=e[k];});
+  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled","trash"].forEach(k=>{if(!d[k])d[k]=e[k];});
   return d;
 }
 // Compute net balance from A's perspective. Positive = B owes A. Negative = A owes B.
@@ -553,7 +566,10 @@ function renderDebtsCard(debts,d){
     html+=`<div style="padding:10px 0;border-bottom:1px solid #1e1e3a22;">
       <div class="row" style="margin-bottom:4px;">
         <span style="font-size:13px;font-weight:600;">${icon(de.category)} ${de.description}${settled?` <span style="font-size:10px;color:#4caf80;">✅</span>`:""}</span>
-        <span class="tag" style="background:${isShared?"#c9a22718":"#1e1e3a"};color:${isShared?"#c9a227":"#6060a0"};border:1px solid ${isShared?"#c9a22744":"#2a2a4a"};">${isShared?"Compartida":nm(de.user)}</span>
+        <span style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+          <span class="tag" style="background:${isShared?"#c9a22718":"#1e1e3a"};color:${isShared?"#c9a227":"#6060a0"};border:1px solid ${isShared?"#c9a22744":"#2a2a4a"};">${isShared?"Compartida":nm(de.user)}</span>
+          <span style="cursor:pointer;font-size:13px;" title="Editar deuda" onclick="doEditEntry(${de.id})">✏️</span>
+        </span>
       </div>
       <div class="bar-wrap" style="margin:6px 0 4px;"><div class="bar" style="width:${pct}%;background:${barCol};"></div></div>
       <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">
@@ -781,8 +797,10 @@ function renderAnalisis(){
   return bar+(analisisTab==="proyeccion"?renderProyeccion():renderGraficas());
 }
 function renderConfig(){
-  const bar=subTabBar([["ajustes","⚙️","Ajustes"],["prestamos","🤝","Préstamos"]],configTab,"configTab");
-  return bar+(configTab==="prestamos"?renderPrestamos():renderAjustes());
+  const d=D();
+  const tn=(d.trash||[]).length;
+  const bar=subTabBar([["ajustes","⚙️","Ajustes"],["prestamos","🤝","Préstamos"],["papelera","🗑️",`Papelera${tn>0?" ("+tn+")":""}`]],configTab,"configTab");
+  return bar+(configTab==="prestamos"?renderPrestamos():configTab==="papelera"?renderPapelera():renderAjustes());
 }
 
 // ── Viajes ─────────────────────────────────────────────────────────────────
@@ -1461,8 +1479,11 @@ function doDeleteEntry(id){
   if(!confirmDelete||confirmDelete.type!=="entry"||confirmDelete.id!==rid){confirmDelete={type:"entry",id:rid};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
   confirmDelete=null;
   const d=D();
-  persist({...d,entries:(d.entries||[]).filter(x=>x.id!==rid)});
-  showToast("✓ Eliminado");
+  const e=(d.entries||[]).find(x=>x.id===rid);
+  if(!e)return;
+  const trashItem={...e,_kind:"entry",_deletedAt:today()};
+  persist({...d,entries:(d.entries||[]).filter(x=>x.id!==rid),trash:[...(d.trash||[]),trashItem]});
+  showToast("🗑️ Movido a papelera");
 }
 
 async function doSettle(){
@@ -1561,8 +1582,11 @@ function doDeleteLoan(id){
   if(!confirmDelete||confirmDelete.type!=="loan"||confirmDelete.id!==lid){confirmDelete={type:"loan",id:lid};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
   confirmDelete=null;
   const d=D();
-  persist({...d,loans:(d.loans||[]).filter(l=>l.id!==lid)});
-  showToast("✓ Eliminado");
+  const l=(d.loans||[]).find(x=>x.id===lid);
+  if(!l)return;
+  const trashItem={...l,_kind:"loan",_deletedAt:today()};
+  persist({...d,loans:(d.loans||[]).filter(x=>x.id!==lid),trash:[...(d.trash||[]),trashItem]});
+  showToast("🗑️ Movido a papelera");
 }
 
 async function doSaveNames(){
@@ -1773,8 +1797,70 @@ async function doAssignToViaje(viajeId,entryId,assign){
 
 async function doDeleteViaje(id){
   const d=D();const vid=Number(id)||id;
-  await persist({...d,viajes:(d.viajes||[]).filter(v=>v.id!==vid)});
-  selectedViaje=null;showToast("✓ Viaje eliminado");
+  const v=(d.viajes||[]).find(x=>x.id===vid);
+  if(!v)return;
+  const trashItem={...v,_kind:"viaje",_deletedAt:today()};
+  await persist({...d,viajes:(d.viajes||[]).filter(x=>x.id!==vid),trash:[...(d.trash||[]),trashItem]});
+  selectedViaje=null;showToast("🗑️ Movido a papelera");
+}
+
+// ── Papelera (recuperación de borrados) ──────────────────────────────────────
+async function doRestoreTrash(id){
+  const d=D();const rid=Number(id)||id;
+  const it=(d.trash||[]).find(x=>x.id===rid);
+  if(!it)return;
+  const kind=it._kind;
+  const clean={...it};delete clean._kind;delete clean._deletedAt;
+  const key=kind==="loan"?"loans":kind==="viaje"?"viajes":"entries";
+  await persist({...d,[key]:[...(d[key]||[]),clean],trash:(d.trash||[]).filter(x=>x.id!==rid)});
+  showToast("♻️ Restaurado");
+}
+
+function doPurgeTrash(id){
+  const rid=Number(id)||id;
+  if(!confirmDelete||confirmDelete.type!=="purge"||confirmDelete.id!==rid){confirmDelete={type:"purge",id:rid};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
+  confirmDelete=null;
+  const d=D();
+  persist({...d,trash:(d.trash||[]).filter(x=>x.id!==rid)});
+  showToast("✓ Eliminado definitivamente");
+}
+
+function doEmptyTrash(){
+  if(!confirmDelete||confirmDelete.type!=="emptytrash"){confirmDelete={type:"emptytrash",id:1};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
+  confirmDelete=null;
+  const d=D();
+  persist({...d,trash:[]});
+  showToast("✓ Papelera vaciada");
+}
+
+function renderPapelera(){
+  const d=D();
+  const trash=[...(d.trash||[])].reverse();
+  let html=`<div class="sec">`;
+  html+=`<div class="help-box">Aquí quedan los elementos que borras. Puedes restaurarlos o eliminarlos para siempre. También puedes usar ↶ (arriba) para deshacer la última acción.</div>`;
+  if(trash.length===0){
+    html+=`<div style="text-align:center;color:#4a4a6a;margin-top:30px;font-size:14px;"><div style="font-size:40px;margin-bottom:12px;">🗑️</div>Papelera vacía</div></div>`;
+    return html;
+  }
+  html+=`<div class="row" style="margin-bottom:10px;"><span style="font-size:11px;color:#4a4a6a;font-family:monospace;">${trash.length} elemento${trash.length!==1?"s":""}</span><span style="font-size:11px;cursor:pointer;color:${confirmDelete&&confirmDelete.type==="emptytrash"?"#ef5350":"#6060a0"};font-family:monospace;" onclick="doEmptyTrash()">${confirmDelete&&confirmDelete.type==="emptytrash"?"¿Vaciar todo?":"Vaciar papelera"}</span></div>`;
+  trash.forEach(it=>{
+    const kindLbl=it._kind==="loan"?"🤝 Préstamo":it._kind==="viaje"?"✈️ Viaje":(it.type==="income"?"💰 Ingreso":it.type==="debt"?"🏦 Deuda":it.type==="transfer"?"💳 Abono":"💸 Gasto");
+    const title=it.name||it.description||it.category||"(sin nombre)";
+    const amt=it.amount?fmtS(it.amount):"";
+    const purging=confirmDelete&&confirmDelete.type==="purge"&&confirmDelete.id===it.id;
+    html+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid #1e1e3a;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${title}</div>
+        <div style="font-size:10px;color:#4a4a6a;font-family:monospace;">${kindLbl}${amt?" · "+amt:""} · borrado ${it._deletedAt||"?"}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0;margin-left:10px;">
+        <span style="font-size:11px;cursor:pointer;color:#4caf80;border:1px solid #4caf8044;padding:4px 9px;border-radius:6px;font-family:monospace;" onclick="doRestoreTrash(${it.id})">♻️ Restaurar</span>
+        <span style="font-size:11px;cursor:pointer;color:${purging?"#ef5350":"#6060a0"};border:1px solid ${purging?"#ef535044":"#2a2a4a"};padding:4px 9px;border-radius:6px;font-family:monospace;" onclick="doPurgeTrash(${it.id})">${purging?"¿Seguro?":"🗑️"}</span>
+      </div>
+    </div>`;
+  });
+  html+=`</div>`;
+  return html;
 }
 
 // ── Category edit ──────────────────────────────────────────────────────────
