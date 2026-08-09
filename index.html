@@ -836,14 +836,25 @@ function paymentGroups(d,de){
   return Object.values(gs).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
 }
 
+// Cuota real del mes: si hay un recurrente con overrides que coincida (misma cat+desc),
+// usa el monto de ESE mes (respeta primas/cesantías/variaciones); si no, usa el promedio plano.
+function cuotaForMonth(d,de,monthKey){
+  const months=de.debtMonths||1;
+  const flat=months>1?Math.round(de.amount/months):de.amount;
+  const rec=(d.recurring||[]).find(r=>r.type==="debt"&&r.category===de.category&&r.description===de.description);
+  if(rec&&rec.overrides&&rec.overrides[monthKey]!=null)return ovTotal(rec.overrides[monthKey],flat);
+  return flat;
+}
 function renderDebtsCard(debts,d){
   const sp=d.split||{A:50,B:50};
   const spA=sp.A/100,spB=sp.B/100;
+  const tm=thisMonth();
   payGroupIndex={};
   let html=`<div class="card"><div class="ct">Deudas y proyectos · progreso de pago</div>`;
   debts.forEach(de=>{
     const months=de.debtMonths||1;
-    const cuota=months>1?Math.round(de.amount/months):de.amount;
+    const flatCuota=months>1?Math.round(de.amount/months):de.amount;
+    const cuota=cuotaForMonth(d,de,tm);
     const isShared=de.user==="shared";
     const isQp=qpDebtId===de.id;
     const pays=paymentsForDebt(d,de);
@@ -853,7 +864,7 @@ function renderDebtsCard(debts,d){
     const settled=pending<1&&paid>0;
     const paidA=isShared?pays.filter(p=>p.paidBy==="A").reduce((s,p)=>s+p.amount,0):(de.user==="A"?paid:0);
     const paidB=isShared?pays.filter(p=>p.paidBy==="B").reduce((s,p)=>s+p.amount,0):(de.user==="B"?paid:0);
-    const cuotasPaid=cuota>0?Math.min(months,Math.round(paid/cuota)):0;
+    const cuotasPaid=flatCuota>0?Math.min(months,Math.round(paid/flatCuota)):0;
     const barCol=settled?"#4caf80":"#c9a227";
     const isExp=debtExpandedId===de.id;
     html+=`<div style="padding:10px 0;border-bottom:1px solid #1e1e3a22;">
@@ -870,7 +881,7 @@ function renderDebtsCard(debts,d){
         <span>${Math.round(pct)}%${months>1?` · cuota ${cuotasPaid}/${months}`:""}</span>
         <span style="color:${pending>0?"#ef5350":"#4caf80"};">Falta ${fmtS(pending)}</span>
       </div>
-      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota ~${fmtS(cuota)}/mes · ${months} meses`:""}</div>
+      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota este mes ${fmtS(cuota)} · ${months} meses`:""}</div>
       ${isShared&&(paidA>0||paidB>0)?`<div style="display:flex;gap:8px;margin-bottom:8px;">
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #64b5f622;"><div style="font-size:9px;color:#64b5f6;font-family:monospace;text-transform:uppercase;">${d.names.A} ha puesto</div><div style="font-size:13px;font-weight:700;color:#64b5f6;font-family:monospace;">${fmtS(paidA)}</div></div>
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #ff8a6522;"><div style="font-size:9px;color:#ff8a65;font-family:monospace;text-transform:uppercase;">${d.names.B} ha puesto</div><div style="font-size:13px;font-weight:700;color:#ff8a65;font-family:monospace;">${fmtS(paidB)}</div></div>
@@ -2468,8 +2479,7 @@ async function doQuickPayDebt(id){
   const d=D();
   const de=(d.entries||[]).find(e=>e.id===eid);
   if(!de)return;
-  const months=de.debtMonths||1;
-  const baseCuota=months>1?Math.round(de.amount/months):de.amount;
+  const baseCuota=cuotaForMonth(d,de,thisMonth());
   const sp=d.split||{A:50,B:50};
   const amtA=Number(qpDebtAmtA)||0;
   const amtB=de.user==="shared"?(qpDebtAmtB!==""?Number(qpDebtAmtB):Math.max(0,baseCuota-amtA)):0;
