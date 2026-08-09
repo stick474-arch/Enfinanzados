@@ -291,6 +291,7 @@ let showAbonoForm=false;
 let abonoAmt="";
 let abonoNote="";
 let abonoFrom="";
+let abonoTarget=""; // "gastos" | "prestamo" | "todo" — a qué ledger aplica el abono
 let movimientosView="lista"; // "lista" | "categorias"
 let analisisTab="graficas"; // "graficas" | "proyeccion"
 let configTab="ajustes"; // "ajustes" | "prestamos"
@@ -570,26 +571,51 @@ function renderBalanceCard(d){
     }
     if(Math.abs(totalNet)>1){
       if(!showAbonoForm){
-        balHtml+=`<button class="btn" style="background:#4db6ac;color:#0a0a12;margin-top:4px;" onclick="showAbonoForm=true;abonoFrom='${totalNet>0?"B":"A"}';abonoAmt='${Math.round(Math.abs(totalNet))}';render()">💳 Registrar abono</button>`;
+        balHtml+=`<button class="btn" style="background:#4db6ac;color:#0a0a12;margin-top:4px;" onclick="doOpenAbono()">💳 Registrar abono</button>`;
       }else{
-        const effPayer=abonoFrom||(totalNet>0?"B":"A");
+        const payerGastos=balA>0?"B":"A",payerLoan=netLoanA<0?"A":"B";
         balHtml+=`<div style="background:#0a0a18;border-radius:10px;padding:12px 14px;border:1px solid #4db6ac44;margin-top:6px;">
-          <div style="font-size:10px;color:#4db6ac;font-family:monospace;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">💳 Registrar abono</div>
-          <label class="fl">¿Quién paga?</label>
+          <div style="font-size:10px;color:#4db6ac;font-family:monospace;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">💳 Registrar abono</div>`;
+        if(hasExp&&hasLoan){
+          balHtml+=`<label class="fl">¿A qué corresponde?</label>
           <div class="chips" style="margin-bottom:10px;">
-            <div class="chip${effPayer==="A"?" on":""}" onclick="abonoFrom='A';render()">${d.names.A}</div>
-            <div class="chip${effPayer==="B"?" on":""}" onclick="abonoFrom='B';render()">${d.names.B}</div>
+            <div class="chip${abonoTarget==="gastos"?" on":""}" onclick="abonoTarget='gastos';abonoFrom='${payerGastos}';abonoAmt='${Math.round(Math.abs(balA))}';render()">📊 Gastos ${fmt(Math.abs(balA))}</div>
+            <div class="chip${abonoTarget==="prestamo"?" on":""}" onclick="abonoTarget='prestamo';abonoFrom='${payerLoan}';abonoAmt='${Math.round(Math.abs(netLoanA))}';render()">🤝 Préstamo ${fmt(Math.abs(netLoanA))}</div>
+            <div class="chip${abonoTarget==="todo"?" on":""}" onclick="abonoTarget='todo';abonoFrom='';abonoAmt='';render()">🔗 Ambos (saldar todo)</div>
+          </div>`;
+        }
+        if(abonoTarget==="todo"){
+          balHtml+=`<div style="font-size:12px;color:#8080a0;line-height:1.7;margin-bottom:10px;">
+            Se registrarán 2 movimientos por separado:<br>
+            📊 Gastos: <b style="color:#f0eff4;">${nm(payerGastos)}</b> paga <b style="color:#f0eff4;">${fmt(Math.abs(balA))}</b><br>
+            🤝 Préstamo: <b style="color:#f0eff4;">${nm(payerLoan)}</b> paga <b style="color:#f0eff4;">${fmt(Math.abs(netLoanA))}</b>
+          </div>
+          <label class="fl">Nota (opcional)</label>
+          <input type="text" placeholder="Ej: Nequi…" value="${(abonoNote||"").replace(/"/g,"&quot;")}" oninput="abonoNote=this.value" style="margin-bottom:10px;"/>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-green" style="margin:0;flex:1;padding:11px;" onclick="doReconcileTodo()">✓ Reconciliar y saldar todo</button>
+            <button class="btn btn-dark" style="margin:0;width:48px;padding:11px;" onclick="showAbonoForm=false;abonoTarget='';render()">✕</button>
+          </div>`;
+        }else{
+          const isPrestamo=abonoTarget==="prestamo";
+          const maxAmt=isPrestamo?Math.abs(netLoanA):Math.abs(balA);
+          const effPayer=abonoFrom||(isPrestamo?payerLoan:payerGastos);
+          balHtml+=`<label class="fl">¿Quién paga?${isPrestamo?" (definido por el préstamo)":""}</label>
+          <div class="chips" style="margin-bottom:10px;">
+            <div class="chip${effPayer==="A"?" on":""}" ${isPrestamo?"":`onclick="abonoFrom='A';render()"`}>${d.names.A}</div>
+            <div class="chip${effPayer==="B"?" on":""}" ${isPrestamo?"":`onclick="abonoFrom='B';render()"`}>${d.names.B}</div>
           </div>
           <label class="fl">Monto (COP)</label>
           <input class="inp-big" type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(abonoAmt)}" oninput="fmtAmountInput(this,v=>abonoAmt=v)" style="font-size:20px;margin-bottom:8px;"/>
-          <button class="btn-sm" style="background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;margin-bottom:10px;padding:6px 12px;" onclick="abonoAmt=String(${Math.round(Math.abs(totalNet))});render()">Saldar todo — ${fmt(Math.abs(totalNet))}</button>
+          <button class="btn-sm" style="background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;margin-bottom:10px;padding:6px 12px;" onclick="abonoAmt=String(${Math.round(maxAmt)});render()">Saldar todo — ${fmt(maxAmt)}</button>
           <label class="fl">Nota (opcional)</label>
           <input type="text" placeholder="Ej: Nequi, por parqueadero…" value="${(abonoNote||"").replace(/"/g,"&quot;")}" oninput="abonoNote=this.value" style="margin-bottom:10px;"/>
           <div style="display:flex;gap:8px;">
-            <button class="btn btn-green" style="margin:0;flex:1;padding:11px;" onclick="doAbonoTransfer()">✓ Confirmar abono</button>
-            <button class="btn btn-dark" style="margin:0;width:48px;padding:11px;" onclick="showAbonoForm=false;abonoAmt='';abonoNote='';abonoFrom='';render()">✕</button>
-          </div>
-        </div>`;
+            <button class="btn btn-green" style="margin:0;flex:1;padding:11px;" onclick="${isPrestamo?"doAbonoPrestamo()":"doAbonoTransfer()"}">✓ Confirmar abono</button>
+            <button class="btn btn-dark" style="margin:0;width:48px;padding:11px;" onclick="showAbonoForm=false;abonoAmt='';abonoNote='';abonoFrom='';abonoTarget='';render()">✕</button>
+          </div>`;
+        }
+        balHtml+=`</div>`;
       }
     }
   }
@@ -2004,6 +2030,21 @@ async function doSettle(){
   showToast("✓ Balance saldado");
 }
 
+// Determina el target correcto al abrir el form: si hay gastos Y préstamo activos a la vez,
+// nunca asume que un solo monto combinado es válido para ninguno de los dos por separado.
+function doOpenAbono(){
+  const d=D();
+  const balA=computeBalance(d);
+  const activeLoans=(d.loans||[]).filter(l=>l.status==="active");
+  const netLoanA=activeLoans.reduce((s,l)=>l.from==="A"?s+(l.amount-l.paid):s-(l.amount-l.paid),0);
+  const hasExp=Math.abs(balA)>1,hasLoan=Math.abs(netLoanA)>1;
+  showAbonoForm=true;abonoNote="";
+  if(hasExp&&hasLoan){abonoTarget="todo";abonoFrom="";abonoAmt="";}
+  else if(hasLoan){abonoTarget="prestamo";abonoFrom=netLoanA<0?"A":"B";abonoAmt=String(Math.round(Math.abs(netLoanA)));}
+  else{abonoTarget="gastos";abonoFrom=balA>0?"B":"A";abonoAmt=String(Math.round(Math.abs(balA)));}
+  render();
+}
+
 async function doAbonoTransfer(){
   const amt=Number(abonoAmt);
   if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
@@ -2013,8 +2054,63 @@ async function doAbonoTransfer(){
   const receiver=payer==="A"?"B":"A";
   const entry={id:Date.now(),type:"transfer",user:"shared",paidBy:payer,amount:amt,description:"Abono de "+nm(payer)+" a "+nm(receiver),category:"Abono",note:abonoNote||null,date:today(),registeredBy:payer};
   await persist({...d,entries:[...(d.entries||[]),entry]});
-  showAbonoForm=false;abonoAmt="";abonoNote="";abonoFrom="";
+  showAbonoForm=false;abonoAmt="";abonoNote="";abonoFrom="";abonoTarget="";
   showToast("✓ Abono de "+fmt(amt)+" registrado");
+}
+
+// Abono dirigido exclusivamente al préstamo (NUNCA escribe una transfer de gastos).
+async function doAbonoPrestamo(){
+  const amt=Number(abonoAmt);
+  if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const d=D();
+  let remaining=amt;
+  const payEntries=[];
+  const nl=(d.loans||[]).map(l=>{
+    if(l.status!=="active"||remaining<=0.5)return l;
+    const pend=l.amount-l.paid;
+    const pay=Math.min(pend,remaining);
+    if(pay<=0)return l;
+    remaining-=pay;
+    const newPaid=l.paid+pay;
+    payEntries.push({id:Date.now()+payEntries.length,type:"loan_payment",user:l.to,category:"Préstamos",description:"Pago: "+l.description,amount:pay,paidBy:l.to,note:abonoNote||null,date:today(),registeredBy:l.to,loanId:l.id});
+    return{...l,paid:newPaid,payments:[...(l.payments||[]),{date:today(),amount:pay}],status:newPaid>=l.amount?"settled":"active"};
+  });
+  if(payEntries.length===0){showToast("⚠️ No hay préstamo activo pendiente");return;}
+  const applied=amt-Math.max(0,remaining);
+  await persist({...d,loans:nl,entries:[...(d.entries||[]),...payEntries]});
+  showAbonoForm=false;abonoAmt="";abonoNote="";abonoFrom="";abonoTarget="";
+  showToast("✓ "+fmt(applied)+" aplicado al préstamo"+(remaining>0.5?" (sobraron "+fmt(remaining)+")":""));
+}
+
+// Reconcilia AMBOS ledgers de una sola vez: registra la transfer de gastos Y el pago del
+// préstamo en un único persist, cada uno con su propio pagador correcto (pueden ser
+// direcciones opuestas — por eso nunca se mezclan en un solo monto/pagador).
+async function doReconcileTodo(){
+  const d=D();
+  const balA=computeBalance(d);
+  const activeLoans=(d.loans||[]).filter(l=>l.status==="active");
+  const netLoanA=activeLoans.reduce((s,l)=>l.from==="A"?s+(l.amount-l.paid):s-(l.amount-l.paid),0);
+  if(Math.abs(balA)<1&&Math.abs(netLoanA)<1){showToast("Ya están al día");return;}
+  const newEntries=[];
+  let newLoans=d.loans||[];
+  if(Math.abs(balA)>1){
+    const payer=balA>0?"B":"A";const receiver=payer==="A"?"B":"A";
+    newEntries.push({id:Date.now(),type:"transfer",user:"shared",paidBy:payer,amount:Math.round(Math.abs(balA)),description:"Abono de "+nm(payer)+" a "+nm(receiver),category:"Abono",note:abonoNote||null,date:today(),registeredBy:payer});
+  }
+  if(Math.abs(netLoanA)>1){
+    let remaining=Math.abs(netLoanA);
+    newLoans=(d.loans||[]).map(l=>{
+      if(l.status!=="active"||remaining<=0.5)return l;
+      const pend=l.amount-l.paid;const pay=Math.min(pend,remaining);
+      if(pay<=0)return l;
+      remaining-=pay;const newPaid=l.paid+pay;
+      newEntries.push({id:Date.now()+newEntries.length+1,type:"loan_payment",user:l.to,category:"Préstamos",description:"Pago: "+l.description,amount:pay,paidBy:l.to,note:"Reconciliado con balance",date:today(),registeredBy:l.to,loanId:l.id});
+      return{...l,paid:newPaid,payments:[...(l.payments||[]),{date:today(),amount:pay}],status:newPaid>=l.amount?"settled":"active"};
+    });
+  }
+  await persist({...d,loans:newLoans,entries:[...(d.entries||[]),...newEntries]});
+  showAbonoForm=false;abonoAmt="";abonoNote="";abonoFrom="";abonoTarget="";
+  showToast("✓ Reconciliado — gastos y préstamo saldados");
 }
 
 async function doSaldarEntry(id){
