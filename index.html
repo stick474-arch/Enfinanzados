@@ -2650,7 +2650,7 @@ function buildProjChart(proj){
 }
 
 function amortize(balance,monthlyRate,months){
-  if(!balance||!monthlyRate||!months||months<1)return[];
+  if(!balance||!monthlyRate||monthlyRate<=0||!months||months<1)return[];
   const payment=balance*monthlyRate/(1-Math.pow(1+monthlyRate,-months));
   const rows=[];
   let rem=balance;
@@ -2664,7 +2664,7 @@ function amortize(balance,monthlyRate,months){
 }
 
 function renderAmortSection(r){
-  const rate=parseFloat(projAmorData.rate)/100||0;
+  const rate=Math.max(0,parseFloat(projAmorData.rate)/100||0);
   const bal=Number((projAmorData.balance||"").replace(/[^0-9]/g,"")||0);
   const months=parseInt(projAmorData.months)||0;
   const rows=rate&&bal&&months?amortize(bal,rate,months):[];
