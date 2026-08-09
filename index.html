@@ -56,6 +56,22 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#c9a227;margin:0;}
 .ie-row{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #1e1e3a;}
 .ie-row input{margin-bottom:0;flex:1;font-size:13px;padding:8px 12px;}
 .card-loan{background:linear-gradient(135deg,#0e1a20,#0e1a2a);border:1px solid #1e3040;}
+:root{--bg:#0a0a12;--card:#12121e;--inset:#0e0e1a;--line:#1e1e3a;--line2:#2a2040;--gold:#c9a227;--good:#4caf80;--bad:#ef5350;--A:#64b5f6;--B:#ff8a65;--loan:#4db6ac;--ink:#f0eff4;--ink2:#8080a0;--ink3:#4a4a6a;}
+.card-advice{background:linear-gradient(135deg,#1c1630,#141428);border:1px solid #c9a22766;box-shadow:0 0 0 1px #c9a22733,0 8px 24px #00000060;border-radius:14px;padding:16px;margin-bottom:12px;}
+.rank-1{border-left:3px solid #c9a227;box-shadow:0 0 8px #c9a22740;}
+.rank-2{border-left:3px solid #9aa0b0;}
+.rank-3{border-left:3px solid #b08050;}
+.pill-rate{display:inline-block;font-family:monospace;font-size:11px;padding:2px 8px;border-radius:20px;background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;}
+.chip-ok{background:#4caf8014;border:1px solid #4caf8055;color:#4caf80;}
+.chip-warn{background:#c9a22714;border:1px solid #c9a22755;color:#c9a227;}
+.chip-bad{background:#ef535014;border:1px solid #ef535055;color:#ef5350;}
+.card-quiet{background:#0e0e1a;border:1px solid #16162a;border-radius:14px;padding:14px;margin-bottom:12px;}
+.debt-notice{border:1px dashed #4a4a6a;}
+.sem{display:flex;gap:8px;margin-bottom:12px;}
+.sem-chip{flex:1;min-width:0;background:#0e0e1a;border:1px solid #1e1e3a;border-radius:12px;padding:9px 11px;cursor:pointer;}
+.sem-chip .k{font-size:9px;color:#4a4a6a;font-family:monospace;text-transform:uppercase;letter-spacing:.08em;}
+.sem-chip .v{font-size:14px;font-weight:700;font-family:monospace;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mini-debt{padding:7px 0;border-bottom:1px solid #1e1e3a22;}
 @media(min-width:768px){
   #app{max-width:1200px;margin:0 auto;}
   #content{padding-bottom:20px;max-width:700px;}
@@ -66,6 +82,12 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#c9a227;margin:0;}
   .nb.on .nb-lbl{color:#c9a227;}
   .nb.on{background:#c9a22714;border-radius:0;}
   .toast{bottom:20px;}
+  #content.wide{max-width:1080px;}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start;}
+  .col-span{grid-column:1/-1;}
+  .sticky-col{position:sticky;top:16px;}
+  .card{padding:18px;}
 }
 </style>
 </head>
@@ -101,7 +123,8 @@ function emptyState(){
   return{entries:[],balances:{A:0,B:0},settled:[],names:{A:"Marce",B:"John"},
     cats:{shared:["Casa / Arriendo","Parqueadero","Servicios","Mercado","Deuda banco","Otro compartido"],
     personal:["Transporte","Ropa","Salud","Entretenimiento","Deuda personal","Otro personal"]},
-    goals:[],split:{A:50,B:50},recurring:[],budgets:{},loans:[],viajes:[],catSettled:[],trash:[]};
+    goals:[],split:{A:50,B:50},recurring:[],budgets:{},loans:[],viajes:[],catSettled:[],trash:[],
+    plan:{strategy:"avalanche",extraSim:500000,allocAhorro:0,allocDeuda:0}};
 }
 
 async function loadFromFirebase(){
@@ -182,7 +205,8 @@ function nm(u){const n=D().names;return u==="A"?n.A:u==="B"?n.B:"Compartido";}
 function D(){return localData||emptyState();}
 function migrate(d){
   const e=emptyState();
-  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled","trash"].forEach(k=>{if(!d[k])d[k]=e[k];});
+  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled","trash","plan"].forEach(k=>{if(!d[k])d[k]=e[k];});
+  if(!d.plan.strategy)d.plan.strategy="avalanche";
   return d;
 }
 // Compute net balance from A's perspective. Positive = B owes A. Negative = A owes B.
@@ -229,7 +253,7 @@ let editId=null;
 let confirmDelete=null; // {type:"entry"|"loan"|"settled", id}
 let payAmounts={};
 let showBalDetail=false;
-let formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina"};
+let formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina",rate:"",rateType:"monthly",priorityLock:false};
 let cuentasMonth="all";
 let cuentasExpanded={};
 let viajeTab="list";
@@ -270,9 +294,12 @@ let abonoFrom="";
 let movimientosView="lista"; // "lista" | "categorias"
 let analisisTab="graficas"; // "graficas" | "proyeccion"
 let configTab="ajustes"; // "ajustes" | "prestamos"
+let asesorTab="prioridad"; // "prioridad" | "plan" | "simular" | "proyeccion"
+let moreTab="movimientos"; // "movimientos" | "viajes" | "graficas" | "config"
+let simExtra=500000; // monto de abono extra en el simulador
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
-const TABS=[["resumen","📊","Inicio"],["agregar","＋","Agregar"],["movimientos","📋","Movimientos"],["viajes","✈️","Viajes"],["analisis","📈","Análisis"],["config","⚙️","Config"]];
+const TABS=[["asesor","🧭","Asesor"],["resumen","📊","Inicio"],["agregar","＋","Registrar"],["deudas","🏦","Deudas"],["mas","⋯","Más"]];
 
 function renderNav(){
   const nav=document.getElementById("nav");
@@ -283,10 +310,10 @@ function renderNav(){
     </button>`).join("");
 }
 
-function setTab(t){if(tab==="agregar"&&t!=="agregar")editId=null;if(t!=="config")editCatIdx=null;tab=t;if(t!=="viajes")selectedViaje=null;if(t==="agregar"&&!editId)resetForm();render();}
+function setTab(t){if(tab==="agregar"&&t!=="agregar")editId=null;if(t!=="mas"){editCatIdx=null;selectedViaje=null;}tab=t;if(t==="agregar"&&!editId)resetForm();render();}
 
 function resetForm(){
-  formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina"};
+  formState={type:"expense",user:"shared",category:"",description:"",amount:"",date:today(),paidBy:"A",debtMonths:12,debtStart:today(),note:"",isRecurring:false,registeredBy:"A",incomeSource:"nomina",rate:"",rateType:"monthly",priorityLock:false};
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────
@@ -295,8 +322,215 @@ function render(){
   document.getElementById("hdr-title").textContent=`💑 ${d.names.A} & ${d.names.B}`;
   document.getElementById("hdr-sub").textContent=`División ${d.split.A}/${d.split.B}`;
   renderNav();
-  const views={resumen:renderResumen,agregar:renderAgregar,movimientos:renderMovimientos,viajes:renderViajes,analisis:renderAnalisis,config:renderConfig};
-  document.getElementById("content").innerHTML=(views[tab]||renderResumen)();
+  const views={asesor:renderAsesor,resumen:renderResumen,agregar:renderAgregar,deudas:renderDeudas,mas:renderMas};
+  const wide=(tab==="asesor"||tab==="resumen"||tab==="deudas");
+  const c=document.getElementById("content");
+  c.className=wide?"wide":"";
+  c.innerHTML=(views[tab]||renderResumen)();
+}
+
+// ═══ MOTOR ASESOR (funciones puras, verificadas) ════════════════════════════
+function monthlyRateOf(de){
+  if(de.rate==null||de.rate===""||isNaN(Number(de.rate)))return null;
+  const r=Number(de.rate)/100;if(r<0)return null;
+  return de.rateType==="ea"?Math.pow(1+r,1/12)-1:r;
+}
+function m2ea(m){return Math.pow(1+m,12)-1;}
+function ea2m(e){return Math.pow(1+e,1/12)-1;}
+function rateLabel(de){
+  const m=monthlyRateOf(de);if(m==null)return"sin tasa";
+  return (m*100).toFixed(2)+"% mensual · "+(m2ea(m)*100).toFixed(1)+"% E.A.";
+}
+function rateEquivText(rate,type){
+  const r=Number(rate);
+  if(rate===""||rate==null||isNaN(r)||r<0)return"";
+  const m=type==="ea"?ea2m(r/100):r/100;
+  return "≈ "+(m*100).toFixed(2)+"% mensual · "+(m2ea(m)*100).toFixed(1)+"% E.A.";
+}
+function debtsOf(d){return (d.entries||[]).filter(e=>e.type==="debt");}
+function pendingOf(d,de){
+  const paid=paymentsForDebt(d,de).reduce((s,p)=>s+(p.amount||0),0);
+  return Math.max(0,de.amount-paid);
+}
+function myShareFactor(d,de){const sp=d.split||{A:50,B:50};return de.user==="shared"?(sp.B/100):(de.user==="B"?1:0);}
+function minPaymentOf(d,de){
+  if(de.minPayment&&Number(de.minPayment)>0)return Number(de.minPayment);
+  // Cuota real para deudas a plazo; para deudas sin plazo (debtMonths<=1) se asume
+  // un ritmo sostenible de ~12 meses (evita tratar el saldo completo como cuota mensual).
+  const months=(de.debtMonths&&de.debtMonths>1)?de.debtMonths:12;
+  return Math.round(de.amount/months);
+}
+function interestThisMonth(d,de){const m=monthlyRateOf(de);if(m==null)return null;return pendingOf(d,de)*m;}
+// John's share of monthly interest (Corrección 3: escala compartidas, excluye deudas de Marce)
+function totalMonthlyInterest(d){
+  return debtsOf(d).map(de=>{const i=interestThisMonth(d,de);return i==null?0:i*myShareFactor(d,de);}).reduce((s,x)=>s+x,0);
+}
+function rankDebts(d,strategy){
+  const list=debtsOf(d).map(de=>{
+    const pend=pendingOf(d,de);const m=monthlyRateOf(de);
+    return{de,pending:pend,mRate:m,hasRate:m!=null,interestMonth:m!=null?pend*m:null,
+      lock:!!de.priorityLock,shared:de.user==="shared",myShare:pend*myShareFactor(d,de),min:minPaymentOf(d,de)};
+  }).filter(x=>x.pending>0.5&&!x.lock);
+  if(strategy==="snowball"){list.sort((a,b)=>a.pending-b.pending||(b.mRate||0)-(a.mRate||0));}
+  else{list.sort((a,b)=>{
+    if(a.hasRate!==b.hasRate)return a.hasRate?-1:1;
+    if(a.hasRate)return (b.mRate-a.mRate)||(b.pending-a.pending);
+    return b.pending-a.pending;});}
+  return list;
+}
+// Corrección 4: prima/cesantías solo como fallback si NO hay ingresos recurrentes registrados
+function incomeForMonth(d,monthKey){
+  const rec=(d.recurring||[]).filter(r=>r.type==="income");
+  if(rec.length)return rec.reduce((s,r)=>s+ovTotal(r.overrides&&r.overrides[monthKey],r.amount),0);
+  let total=6200000;const mo=monthKey.slice(5);
+  if(mo==="06"||mo==="12")total+=3487899;
+  return total;
+}
+// Corrección 5: escala admin/servicios/compartidas por la parte de John
+function fixedOutflowsForMonth(d,monthKey){
+  const sp=d.split||{A:50,B:50};let fixed=0;
+  const recCats=new Set((d.recurring||[]).filter(r=>r.type==="debt"&&(r.debtMonths||0)>1).map(r=>r.category+"|"+r.description));
+  (d.recurring||[]).forEach(r=>{
+    if(r.type==="income")return;
+    if(r.type==="debt"&&(r.debtMonths||0)>1){
+      const startKey=(r.debtStart||monthKey).slice(0,7);const el=moElapsed(startKey,monthKey);
+      if(el<0||el>=r.debtMonths)return;
+      const monthly=Math.round(r.amount/r.debtMonths);
+      const amt=ovTotal(r.overrides&&r.overrides[monthKey],monthly);
+      fixed+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
+    }else if(r.type==="expense"){
+      const amt=ovTotal(r.overrides&&r.overrides[monthKey],r.amount);
+      fixed+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
+    }
+  });
+  (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring).forEach(e=>{
+    const startKey=(e.debtStart||e.date||"").slice(0,7);if(!startKey)return;
+    const el=moElapsed(startKey,monthKey);if(el<0||el>=e.debtMonths)return;
+    if(recCats.has(e.category+"|"+(e.description||"")))return;
+    const monthly=Math.round(e.amount/e.debtMonths);
+    fixed+=e.user==="shared"?monthly*(sp.B/100):(e.user==="B"?monthly:0);
+  });
+  return Math.round(fixed);
+}
+function capitalPlan(d,monthKey){const income=incomeForMonth(d,monthKey);const fixed=fixedOutflowsForMonth(d,monthKey);return{income,fixed,free:income-fixed};}
+// Corrección 6: definición única de "gasto base de vida" (recurrentes de gasto, no deuda)
+function monthlyLivingCost(d,monthKey){
+  const sp=d.split||{A:50,B:50};let c=0;
+  (d.recurring||[]).forEach(r=>{if(r.type!=="expense")return;
+    const amt=ovTotal(r.overrides&&r.overrides[monthKey],r.amount);
+    c+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);});
+  return Math.round(c);
+}
+function emergencyTarget(d,months){return monthlyLivingCost(d,thisMonth())*(months||3);}
+function emergencyFundNow(d){return (d.goals||[]).filter(g=>/emerg|fondo|colch/i.test(g.name||"")).reduce((s,g)=>s+(g.current||0),0);}
+function emergencyGap(d){return Math.max(0,emergencyTarget(d,3)-emergencyFundNow(d));}
+function suggestAllocation(d,monthKey){
+  const {free}=capitalPlan(d,monthKey);
+  if(free<=0)return{deficit:true,free};
+  const feGap=emergencyGap(d);
+  const aporteFE=Math.min(free,Math.max(0,Math.min(feGap,free*0.2)));
+  const rest=free-aporteFE;
+  const rk=rankDebts(d,"avalanche");
+  const hayDeudaCara=rk.some(x=>x.hasRate&&x.mRate>0);
+  const wDeuda=hayDeudaCara?0.7:0.3;const top=rk[0];
+  return{deficit:false,free,fondoEmergencia:Math.round(aporteFE),
+    extraDeuda:Math.round(rest*wDeuda),ahorroMetas:Math.round(rest*(1-wDeuda)),
+    deudaObjetivo:top?top.de.description:null};
+}
+// Simulador mes a mes con Correcciones 1 (impagables) y 2 (mínimos liberados al inicio)
+function simulatePayoff(d,strategy,extraMonthly,maxMonths){
+  maxMonths=maxMonths||600;
+  let debts=rankDebts(d,strategy).map(x=>({id:x.de.id,desc:x.de.description,bal:x.pending,m:x.mRate!=null?x.mRate:0,min:x.min}));
+  if(debts.length===0)return{months:0,totalInterest:0,timeline:[],debtFree:true,unpayable:null};
+  const initialMins={};debts.forEach(dd=>initialMins[dd.id]=dd.min);
+  function reorder(list){
+    const l=list.filter(x=>x.bal>0.5);
+    if(strategy==="snowball")l.sort((a,b)=>a.bal-b.bal||b.m-a.m);
+    else l.sort((a,b)=>b.m-a.m||b.bal-a.bal);
+    return l;
+  }
+  const timeline=[];let month=0;let totalInterest=0;
+  while(debts.some(dd=>dd.bal>0.5)&&month<maxMonths){
+    month++;
+    let freed=0;debts.forEach(dd=>{if(dd.bal<=0.5)freed+=initialMins[dd.id]||0;});
+    let pool=extraMonthly+freed;
+    const unpay=debts.filter(dd=>dd.bal>0.5&&dd.m>0&&dd.min<dd.bal*dd.m);
+    let ordered=reorder(debts);
+    if(unpay.length){unpay.sort((a,b)=>b.m-a.m);ordered=unpay.concat(ordered.filter(x=>unpay.indexOf(x)<0));}
+    for(const dd of debts){
+      if(dd.bal<=0.5){dd.bal=0;continue;}
+      const interes=dd.bal*dd.m;totalInterest+=interes;dd.bal+=interes;
+      dd.bal-=Math.min(dd.bal,dd.min);
+    }
+    for(const dd of ordered){
+      if(pool<=0)break;if(dd.bal<=0.5){dd.bal=0;continue;}
+      const ep=Math.min(dd.bal,pool);dd.bal-=ep;pool-=ep;
+    }
+    timeline.push({month,totalBal:Math.round(debts.reduce((s,x)=>s+Math.max(0,x.bal),0))});
+  }
+  const debtFree=debts.every(dd=>dd.bal<=0.5);
+  let growing=null;
+  if(!debtFree){
+    const g=debts.filter(dd=>dd.bal>0.5&&dd.m>0&&dd.min<dd.bal*dd.m).sort((a,b)=>b.bal-a.bal)[0];
+    if(g)growing={desc:g.desc,need:Math.ceil(g.bal*g.m)};
+  }
+  return{months:month,totalInterest:Math.round(totalInterest),timeline,debtFree,unpayable:growing};
+}
+function forecastNextMonthFixed(d){
+  const mk=thisMonth();const sp=d.split||{A:50,B:50};const items=[];
+  (d.recurring||[]).forEach(r=>{if(r.type!=="expense")return;
+    const amt=ovTotal(r.overrides&&r.overrides[mk],r.amount);
+    const share=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
+    if(share>0)items.push({name:r.description||r.category,amount:Math.round(share)});});
+  return items;
+}
+// Feed de consejos ordenados por severidad
+function advisorInsights(d){
+  const out=[];const strat=(d.plan&&d.plan.strategy)||"avalanche";
+  const rk=rankDebts(d,strat);const withRate=rk.filter(x=>x.hasRate);
+  const noRate=debtsOf(d).filter(de=>pendingOf(d,de)>0.5&&!de.priorityLock&&monthlyRateOf(de)==null);
+  if(withRate.length===0&&noRate.length>0){
+    out.push({sev:"warn",icon:"🏦",title:"Agrega las tasas de interés de tus deudas",
+      body:"Sin tasas no puedo priorizar por costo real. Toca una deuda y añade su interés (mensual o E.A.) para activar tu plan de avalancha.",
+      cta:{tab:"deudas",label:"Ir a Deudas →"}});
+  }
+  if(withRate.length){const top=withRate[0];
+    out.push({sev:"bad",icon:"🎯",title:"Prioriza "+top.de.description,
+      body:rateLabel(top.de)+" — te cuesta "+fmt(Math.round(top.interestMonth))+"/mes en intereses. Ataca esta deuda primero.",
+      cta:{tab:"asesor",asesorTab:"simular",label:"Simular abono →"}});}
+  const alloc=suggestAllocation(d,thisMonth());
+  if(alloc.deficit){out.push({sev:"bad",icon:"⚠️",title:"Este mes tus gastos fijos superan tu ingreso",
+      body:"Revisa obligaciones; considera renegociar cuotas o posponer abonos extra.",cta:{tab:"asesor",asesorTab:"plan",label:"Ver mi plan →"}});}
+  else if(alloc.free>0&&alloc.deudaObjetivo&&alloc.extraDeuda>0){
+    out.push({sev:"warn",icon:"💰",title:"Tienes "+fmt(alloc.free)+" libres este mes",
+      body:"Sugerencia: "+fmt(alloc.extraDeuda)+" extra a "+alloc.deudaObjetivo+", "+fmt(alloc.fondoEmergencia)+" a tu fondo, "+fmt(alloc.ahorroMetas)+" a ahorro/metas.",
+      cta:{tab:"asesor",asesorTab:"plan",label:"Ver mi plan →"}});}
+  const inc=incomeForMonth(d,thisMonth());
+  debtsOf(d).forEach(de=>{const pend=pendingOf(d,de);if(pend<=0.5||de.priorityLock)return;
+    const pct=de.amount>0?(1-pend/de.amount):0;
+    if(pct>=0.7&&pend<=inc)out.push({sev:"ok",icon:"🟢",title:de.description+" está al "+Math.round(pct*100)+"%",
+      body:"Un abono de "+fmt(pend)+" la elimina por completo.",cta:{tab:"deudas",label:"Ver deuda →"}});});
+  const mo=thisMonth().slice(5);const topSeason=withRate[0]||rk[0];
+  if(mo==="06"||mo==="12")out.push({sev:"warn",icon:"➕",title:"Este mes entra tu Prima ($3.487.899)",
+      body:topSeason?("Destínala a "+topSeason.de.description+": adelantas varias cuotas y ahorras intereses."):"Destínala a tu deuda de mayor tasa.",
+      cta:{tab:"asesor",asesorTab:"simular",label:"Simular con prima →"}});
+  else if(mo==="02")out.push({sev:"warn",icon:"➕",title:"Febrero: entran tus cesantías",
+      body:"Un abono grande a tu deuda de mayor tasa reduce mucho el interés total.",cta:{tab:"asesor",asesorTab:"simular",label:"Simular →"}});
+  const activeLoans=(d.loans||[]).filter(l=>l.status==="active");
+  const netLoanA=activeLoans.reduce((s,l)=>l.from==="A"?s+(l.amount-l.paid):s-(l.amount-l.paid),0);
+  if(Math.abs(netLoanA)>1){const who=netLoanA<0?d.names.A+" le debe a "+d.names.B:d.names.B+" le debe a "+d.names.A;
+    out.push({sev:"info",icon:"🤝",title:"Préstamo entre ustedes",body:who+" "+fmt(Math.abs(netLoanA))+".",cta:{tab:"mas",moreTab:"config",configTab:"prestamos",label:"Ver préstamos →"}});}
+  const order={bad:0,warn:1,info:2,ok:3};
+  out.sort((a,b)=>order[a.sev]-order[b.sev]);
+  return out;
+}
+function insightCta(cta){
+  if(!cta)return"";
+  let s="tab='"+cta.tab+"';";
+  if(cta.asesorTab)s+="asesorTab='"+cta.asesorTab+"';";
+  if(cta.moreTab)s+="moreTab='"+cta.moreTab+"';";
+  if(cta.configTab)s+="configTab='"+cta.configTab+"';";
+  return s+"render()";
 }
 
 // ── Resumen ────────────────────────────────────────────────────────────────
@@ -450,7 +684,7 @@ function renderResumen(){
     <div class="card card-warn">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <div class="ct" style="color:#c9a227;margin-bottom:0;">⚠️ Alertas de presupuesto</div>
-        <span style="font-size:10px;color:#c9a227;cursor:pointer;font-family:monospace;border:1px solid #c9a22744;padding:3px 8px;border-radius:6px;" onclick="settingsTab='budgets';configTab='ajustes';tab='config';render()">editar límites →</span>
+        <span style="font-size:10px;color:#c9a227;cursor:pointer;font-family:monospace;border:1px solid #c9a22744;padding:3px 8px;border-radius:6px;" onclick="settingsTab='budgets';configTab='ajustes';moreTab='config';tab='mas';render()">editar límites →</span>
       </div>
       ${alerts.map(b=>`
         <div style="margin-bottom:10px;">
@@ -482,14 +716,44 @@ function renderResumen(){
       <span style="font-size:18px;">✕</span>
     </div>`:"";
 
+  // Hero de consejo (primer insight del asesor)
+  const insights=advisorInsights(d);
+  const hero=insights[0];
+  const heroHtml=hero?`<div class="card-advice"><div style="font-size:15px;font-weight:700;margin-bottom:5px;">${hero.icon} ${hero.title}</div><div style="font-size:13px;color:#a0a0c0;line-height:1.55;margin-bottom:${hero.cta?"10px":"0"};">${hero.body}</div>${hero.cta?`<button class="btn-sm" style="background:#c9a227;color:#0a0a12;font-weight:700;" onclick="${insightCta(hero.cta)}">${hero.cta.label}</button>`:""}</div>`:"";
+  // Semáforo (3 chips derivados)
+  const netBal=computeBalance(d);
+  const activeLoans=(d.loans||[]).filter(l=>l.status==="active");
+  const netLoanA=activeLoans.reduce((s,l)=>l.from==="A"?s+(l.amount-l.paid):s-(l.amount-l.paid),0);
+  const totalNet=netBal+netLoanA;
+  const spB=(d.split.B||50)/100;
+  const tS=me.filter(e=>e.type==="expense"&&e.user==="shared").reduce((s,e)=>s+e.amount,0);
+  const tB=me.filter(e=>e.type==="expense"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
+  const iB=me.filter(e=>e.type==="income"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
+  const dispB=Math.round(iB-tB-tS*spB);
+  const deudaTotal=debtsOf(d).reduce((s,de)=>s+pendingOf(d,de),0);
+  const semHtml=`<div class="sem">
+    <div class="sem-chip" onclick="showBalDetail=true;render()"><div class="k">Balance pareja</div><div class="v" style="color:${Math.abs(totalNet)<1?"#4caf80":"#c9a227"};">${Math.abs(totalNet)<1?"al día ✓":fmt(Math.abs(totalNet))}</div></div>
+    <div class="sem-chip" onclick="tab='asesor';asesorTab='plan';render()"><div class="k">Disponible John</div><div class="v" style="color:${dispB>=0?"#4caf80":"#ef5350"};">${fmt(dispB)}</div></div>
+    <div class="sem-chip" onclick="tab='deudas';render()"><div class="k">Deuda total</div><div class="v" style="color:#ef5350;">${fmt(deudaTotal)}</div></div>
+  </div>`;
+  // Mini-deudas (top 3 por pendiente, solo lectura)
+  const debtsList=debtsOf(d).map(de=>({de,pend:pendingOf(d,de)})).filter(x=>x.pend>0.5).sort((a,b)=>b.pend-a.pend).slice(0,3);
+  const miniDebtsHtml=debtsList.length?`<div class="card"><div class="row" style="margin-bottom:8px;"><div class="ct" style="margin:0;">Deudas — top pendientes</div><span style="font-size:11px;color:#c9a227;cursor:pointer;font-family:monospace;" onclick="tab='deudas';render()">Ver todas →</span></div>
+    ${debtsList.map(x=>{const pct=x.de.amount>0?(1-x.pend/x.de.amount)*100:0;return`<div class="mini-debt"><div class="row" style="margin:0 0 4px;"><span style="font-size:13px;">${icon(x.de.category)} ${x.de.description}</span><span style="font-size:12px;color:#ef5350;font-family:monospace;">${fmt(x.pend)}</span></div><div class="bar-wrap" style="height:6px;margin:0;"><div class="bar" style="width:${pct}%;background:#c9a227;"></div></div></div>`;}).join("")}
+  </div>`:"";
+
   return`<div class="sec">
     ${notifHtml}
-    ${renderBalanceCard(d)}
-    ${renderThisMonthCard(d)}
-    ${renderWeekCard(d)}
+    ${heroHtml}
+    ${semHtml}
+    <div class="grid-2">
+      ${renderBalanceCard(d)}
+      ${renderThisMonthCard(d)}
+    </div>
+    ${miniDebtsHtml}
     ${alertsHtml}
-    ${debts.length>0?renderDebtsCard(debts,d):""}
     ${goalsHtml}
+    ${renderWeekCard(d)}
   </div>`;
 }
 
@@ -723,7 +987,18 @@ function renderAgregar(){
         <label class="fl">Plazo (meses)</label>
         <input id="f-months" type="number" placeholder="12" value="${f.debtMonths||12}" oninput="formState.debtMonths=this.value"/>
         <label class="fl">Fecha inicio</label>
-        <input id="f-dstart" type="date" value="${f.debtStart||today()}" onchange="formState.debtStart=this.value"/>`:""}
+        <input id="f-dstart" type="date" value="${f.debtStart||today()}" onchange="formState.debtStart=this.value"/>
+        <label class="fl">Tasa de interés (opcional)</label>
+        <div class="chips" style="margin-bottom:8px;">
+          <div class="chip${(f.rateType||"monthly")==="monthly"?" on":""}" onclick="formState.rateType='monthly';render()">Mensual</div>
+          <div class="chip${f.rateType==="ea"?" on":""}" onclick="formState.rateType='ea';render()">Efectiva Anual (E.A.)</div>
+        </div>
+        <input id="f-rate" type="text" inputmode="decimal" placeholder="Ej: 2.1  (deja vacío si no tiene interés)" value="${f.rate!=null?f.rate:""}" oninput="formState.rate=this.value.replace(/[^0-9.]/g,'');var s=document.getElementById('rate-equiv');if(s)s.textContent=rateEquivText(formState.rate,formState.rateType||'monthly');"/>
+        <div id="rate-equiv" style="font-size:11px;color:#c9a227;font-family:monospace;margin:-4px 0 10px;">${rateEquivText(f.rate,f.rateType||"monthly")}</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 12px;background:#0e0e1a;border-radius:10px;border:1px solid #1e1e3a;">
+          <input type="checkbox" id="f-lock" ${f.priorityLock?"checked":""} onchange="formState.priorityLock=this.checked"/>
+          <label for="f-lock" style="font-size:13px;color:#8080a0;cursor:pointer;">🔒 Deuda pactada (cuota fija de casa/carro) — no incluir en la priorización</label>
+        </div>`:""}
       <label class="fl">¿Quién registra?</label>
       <div class="chips">
         <div class="chip${f.registeredBy==="A"?" on":""}" onclick="setForm('registeredBy','A')">${d.names.A}</div>
@@ -736,7 +1011,7 @@ function renderAgregar(){
       <button class="btn" onclick="doSaveEntry()" ${saving?"disabled":""}>
         ${saving?"Guardando…":editId?"💾 Guardar cambios":"＋ Agregar"}
       </button>
-      ${editId?`<button class="btn btn-dark" onclick="editId=null;setTab('movimientos')">Cancelar</button>`:""}
+      ${editId?`<button class="btn btn-dark" onclick="editId=null;moreTab='movimientos';setTab('mas')">Cancelar</button>`:""}
     </div>
     ${(D().recurring||[]).length>0?`<div class="card">
       <div class="ct">Recurrentes — toca para agregar hoy</div>
@@ -854,6 +1129,152 @@ function renderConfig(){
   const tn=(d.trash||[]).length;
   const bar=subTabBar([["ajustes","⚙️","Ajustes"],["prestamos","🤝","Préstamos"],["papelera","🗑️",`Papelera${tn>0?" ("+tn+")":""}`]],configTab,"configTab");
   return bar+(configTab==="prestamos"?renderPrestamos():configTab==="papelera"?renderPapelera():renderAjustes());
+}
+function renderMas(){
+  const d=D();const tn=(d.trash||[]).length;
+  const bar=subTabBar([["movimientos","📋","Movimientos"],["viajes","✈️","Viajes"],["graficas","📈","Gráficas"],["config","⚙️",`Config${tn>0?" ("+tn+")":""}`]],moreTab,"moreTab");
+  let body;
+  if(moreTab==="viajes")body=renderViajes();
+  else if(moreTab==="graficas")body=renderGraficas();
+  else if(moreTab==="config")body=renderConfig();
+  else body=renderMovimientos();
+  return bar+body;
+}
+function renderDeudas(){
+  const d=D();
+  const debts=(d.entries||[]).filter(e=>e.type==="debt");
+  if(debts.length===0)return`<div class="sec"><div class="card-quiet" style="text-align:center;padding:32px 16px;"><div style="font-size:38px;margin-bottom:10px;">🏦</div><div style="font-size:14px;color:#8080a0;margin-bottom:6px;">Aún no registras deudas</div><div style="font-size:12px;color:#4a4a6a;margin-bottom:14px;">Agrégala para que el asesor te ayude a priorizar y pagar menos intereses.</div><button class="btn" style="max-width:280px;margin:0 auto;" onclick="resetForm();formState.type='debt';tab='agregar';render()">＋ Registrar deuda</button></div></div>`;
+  return `<div class="sec">`+renderDebtsCard(debts,d)+`</div>`;
+}
+
+// ── Asesor ─────────────────────────────────────────────────────────────────
+async function doSetStrategy(s){const d=D();await persist({...d,plan:{...(d.plan||{}),strategy:s}});}
+function allocRow(label,amount,col){return `<div class="row" style="margin-bottom:6px;"><span style="font-size:13px;color:#8080a0;">${label}</span><span style="font-size:14px;font-weight:700;color:${col};font-family:monospace;">${fmt(amount)}</span></div>`;}
+function simSparkline(timeline){
+  const n=timeline.length;const W=Math.max(280,n*10),H=70,p=6;
+  const max=Math.max(...timeline.map(t=>t.totalBal),1);
+  const pts=timeline.map((t,i)=>{const x=p+(W-2*p)*(i/(n-1||1));const y=p+(H-2*p)*(1-t.totalBal/max);return x.toFixed(1)+","+y.toFixed(1);});
+  return `<div style="overflow-x:auto;margin-top:10px;background:#08080f;border-radius:8px;padding:4px;"><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block;"><polyline points="${pts.join(" ")}" fill="none" stroke="#c9a227" stroke-width="2"/><line x1="${p}" x2="${W-p}" y1="${H-p}" y2="${H-p}" stroke="#1e1e3a" stroke-width="0.5"/></svg></div>`;
+}
+function renderAsesor(){
+  const bar=subTabBar([["prioridad","🎯","Prioridad"],["plan","💰","Mi plan"],["simular","🧮","Simular"],["proyeccion","📉","Proyección"]],asesorTab,"asesorTab");
+  const d=D();let body;
+  if(asesorTab==="plan")body=renderAsesorPlan(d);
+  else if(asesorTab==="simular")body=renderAsesorSimular(d);
+  else if(asesorTab==="proyeccion")body=renderProyeccion();
+  else body=renderAsesorPrioridad(d);
+  return bar+body;
+}
+function renderAsesorPrioridad(d){
+  const strat=(d.plan&&d.plan.strategy)||"avalanche";
+  const rk=rankDebts(d,strat);const bleed=totalMonthlyInterest(d);
+  const locked=debtsOf(d).filter(de=>de.priorityLock&&pendingOf(d,de)>0.5);
+  const medals=["🥇","🥈","🥉"];
+  let html=`<div class="sec">`;
+  html+=`<div class="chips" style="margin-bottom:6px;">
+    <div class="chip${strat==="avalanche"?" on":""}" onclick="doSetStrategy('avalanche')">📉 Avalancha</div>
+    <div class="chip${strat==="snowball"?" on":""}" onclick="doSetStrategy('snowball')">⛄ Bola de nieve</div>
+  </div>
+  <div style="font-size:11px;color:#6060a0;font-family:monospace;margin-bottom:12px;">${strat==="avalanche"?"Ataca la tasa más alta primero — pagas menos intereses en total.":"Salda la deuda más pequeña primero — más impulso y motivación."}</div>`;
+  if(bleed>0)html+=`<div class="card-quiet" style="border:1px solid #ef535033;margin-bottom:12px;"><div class="row" style="margin:0;"><span style="font-size:12px;color:#8080a0;">🩸 Intereses tuyos este mes</span><span style="font-size:16px;font-weight:700;color:#ef5350;font-family:monospace;">${fmt(Math.round(bleed))}</span></div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:4px;">≈ ${fmt(Math.round(bleed*12))} al año si nada cambia</div></div>`;
+  if(rk.length===0){
+    html+=`<div class="card-quiet debt-notice" style="text-align:center;padding:24px;"><div style="font-size:13px;color:#8080a0;">No hay deudas activas para priorizar 🎉</div></div>`;
+  }else{
+    rk.forEach((x,i)=>{
+      const rankCls=i===0?"rank-1":i===1?"rank-2":i===2?"rank-3":"";
+      const medal=medals[i]||"▫️";
+      html+=`<div class="card ${rankCls}">
+        <div class="row" style="margin-bottom:4px;">
+          <span style="font-size:14px;font-weight:700;">${medal} ${x.de.description}</span>
+          <span class="pill-rate${x.hasRate?"":" debt-notice"}" style="${x.hasRate?"":"background:#0e0e1a;color:#6060a0;border-color:#3a3a5a;"}">${x.hasRate?rateLabel(x.de):"sin tasa"}</span>
+        </div>
+        <div style="font-size:11px;color:#6060a0;font-family:monospace;margin-bottom:6px;">Saldo ${fmt(x.pending)}${x.shared?` · compartida, tu parte ${fmt(Math.round(x.myShare))}`:""}</div>`;
+      if(x.interestMonth!=null)html+=`<div class="row" style="margin:0 0 6px;"><span style="font-size:11px;color:#8080a0;">Interés este mes</span><span style="font-size:13px;font-weight:700;color:#ef5350;font-family:monospace;">${fmt(Math.round(x.interestMonth))}</span></div>`;
+      if(i===0&&x.hasRate)html+=`<div style="font-size:12px;color:#c9a227;font-weight:600;margin-bottom:8px;">▸ Ataca esta primero — aquí se te va más plata</div>`;
+      if(!x.hasRate)html+=`<div style="font-size:11px;color:#4a4a6a;margin-bottom:8px;">Agrega su tasa para priorizarla por costo real.</div>`;
+      html+=`<div style="display:flex;gap:8px;">
+        <button class="btn-sm" style="background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;flex:1;" onclick="simExtra=500000;asesorTab='simular';render()">🧮 Simular abono</button>
+        <button class="btn-sm btn-dark" onclick="doEditEntry(${x.de.id})">✏️ ${x.hasRate?"Editar":"Agregar tasa"}</button>
+      </div></div>`;
+    });
+  }
+  if(locked.length)html+=`<div class="card-quiet"><div style="font-size:11px;color:#6060a0;font-family:monospace;line-height:1.5;">🔒 Pactadas (fuera de la priorización): ${locked.map(de=>de.description).join(", ")}. Se gestionan en la pestaña Deudas.</div></div>`;
+  const feed=advisorInsights(d).filter(ins=>ins.icon!=="🎯");
+  if(feed.length){
+    html+=`<div class="ct" style="margin:14px 0 8px;">Consejos</div>`;
+    feed.forEach(ins=>{
+      const col=ins.sev==="bad"?"#ef5350":ins.sev==="warn"?"#c9a227":ins.sev==="ok"?"#4caf80":"#4db6ac";
+      html+=`<div class="card-quiet" style="border-left:3px solid ${col};"><div style="font-size:13px;font-weight:600;margin-bottom:3px;">${ins.icon} ${ins.title}</div><div style="font-size:12px;color:#8080a0;line-height:1.5;">${ins.body}</div>${ins.cta?`<div style="margin-top:6px;"><span style="font-size:11px;color:${col};cursor:pointer;font-family:monospace;" onclick="${insightCta(ins.cta)}">${ins.cta.label}</span></div>`:""}</div>`;
+    });
+  }
+  html+=`</div>`;
+  return html;
+}
+function renderAsesorPlan(d){
+  const mk=thisMonth();
+  const cp=capitalPlan(d,mk);const alloc=suggestAllocation(d,mk);
+  const living=monthlyLivingCost(d,mk);const feTarget=emergencyTarget(d,3);const feNow=emergencyFundNow(d);
+  const ratio=cp.income>0?Math.round((cp.fixed/cp.income)*100):0;
+  const ratioCol=ratio<30?"#4caf80":ratio<=45?"#c9a227":"#ef5350";
+  let html=`<div class="sec">`;
+  html+=`<div class="card card-gold">
+    <div class="ct">Tu plan del mes — ${mk}</div>
+    <div class="row" style="margin-bottom:4px;"><span style="font-size:13px;color:#8080a0;">💵 Ingreso</span><span style="font-size:16px;font-weight:700;color:#4caf80;font-family:monospace;">${fmt(cp.income)}</span></div>
+    <div class="row" style="margin-bottom:4px;"><span style="font-size:13px;color:#8080a0;">🔒 Obligaciones fijas (tu parte)</span><span style="font-size:14px;font-weight:700;color:#ef5350;font-family:monospace;">−${fmt(cp.fixed)}</span></div>
+    <div style="height:1px;background:#2a2040;margin:8px 0;"></div>
+    <div class="row" style="margin:0;"><span style="font-size:13px;color:#f0eff4;font-weight:600;">${cp.free>=0?"🟢 Disponible":"🔴 Déficit"}</span><span style="font-size:19px;font-weight:700;color:${cp.free>=0?"#4caf80":"#ef5350"};font-family:monospace;">${fmt(cp.free)}</span></div>
+  </div>`;
+  html+=`<div class="card-quiet"><div class="row" style="margin:0 0 6px;"><span style="font-size:12px;color:#8080a0;">Compromiso (fijos ÷ ingreso)</span><span style="font-size:13px;font-weight:700;color:${ratioCol};font-family:monospace;">${ratio}%</span></div><div class="bar-wrap"><div class="bar" style="width:${Math.min(ratio,100)}%;background:${ratioCol};"></div></div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:4px;">${ratio<30?"Saludable":ratio<=45?"Ajustado":"Alto — cuidado con nuevos gastos"}</div></div>`;
+  if(!alloc.deficit&&cp.free>0){
+    html+=`<div class="card"><div class="ct">Reparto sugerido del disponible</div>
+      ${allocRow("🛡️ Fondo de emergencia",alloc.fondoEmergencia,"#4db6ac")}
+      ${allocRow("🎯 Extra a "+(alloc.deudaObjetivo||"deuda"),alloc.extraDeuda,"#c9a227")}
+      ${allocRow("💚 Ahorro / metas",alloc.ahorroMetas,"#4caf80")}
+      <button class="btn" style="margin-top:10px;" onclick="simExtra=${alloc.extraDeuda||500000};asesorTab='simular';render()">🧮 Simular ese abono a deuda →</button>
+    </div>`;
+    html+=`<div class="card-quiet"><div class="row" style="margin:0 0 6px;"><span style="font-size:12px;color:#8080a0;">🛡️ Fondo de emergencia (meta 3 meses)</span><span style="font-size:12px;font-family:monospace;color:#4db6ac;">${fmt(feNow)} / ${fmt(feTarget)}</span></div><div class="bar-wrap"><div class="bar" style="width:${feTarget>0?Math.min(100,feNow/feTarget*100):0}%;background:#4db6ac;"></div></div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:4px;">Gasto base de vida: ${fmt(living)}/mes. Crea una meta llamada "Fondo de emergencia" para llevar el registro.</div></div>`;
+  }else if(alloc.deficit){
+    html+=`<div class="card card-warn"><div style="font-size:13px;color:#ef5350;font-weight:600;margin-bottom:4px;">⚠️ Déficit este mes</div><div style="font-size:12px;color:#8080a0;line-height:1.5;">Tus obligaciones fijas (${fmt(cp.fixed)}) superan tu ingreso (${fmt(cp.income)}). Considera renegociar cuotas, reducir gastos variables o posponer abonos extra.</div></div>`;
+  }
+  const mo=mk.slice(5);
+  if(mo==="06"||mo==="12"||mo==="02"){
+    const top=rankDebts(d,(d.plan&&d.plan.strategy)||"avalanche")[0];
+    const extra=mo==="02"?"tus cesantías":"tu Prima ($3.487.899)";
+    html+=`<div class="card" style="border:1px solid #c9a22744;"><div style="font-size:13px;color:#c9a227;font-weight:600;margin-bottom:4px;">➕ Este mes entra ${extra}</div><div style="font-size:12px;color:#8080a0;line-height:1.5;">${top?"Destínala a "+top.de.description+" (tu deuda prioritaria) para adelantar cuotas y ahorrar intereses.":"Destínala a tu deuda de mayor tasa."}</div>${mo!=="02"?`<button class="btn-sm" style="margin-top:8px;background:#c9a22718;border:1px solid #c9a22744;color:#c9a227;" onclick="simExtra=3487899;asesorTab='simular';render()">🧮 Simular abono de la prima →</button>`:""}</div>`;
+  }
+  html+=`</div>`;
+  return html;
+}
+function renderAsesorSimular(d){
+  const strat=(d.plan&&d.plan.strategy)||"avalanche";
+  const extra=Number(simExtra)||0;
+  const rk=rankDebts(d,strat);const top=rk[0];
+  let html=`<div class="sec">`;
+  if(rk.length===0){html+=`<div class="card-quiet" style="text-align:center;padding:24px;"><div style="font-size:13px;color:#8080a0;">No hay deudas activas para simular 🎉</div></div></div>`;return html;}
+  const base=simulatePayoff(d,strat,0);
+  const plan=simulatePayoff(d,strat,extra);
+  html+=`<div class="card"><div class="ct">Abono extra mensual${top?" · dirigido a "+top.de.description:""}</div>
+    <input class="inp-big" type="text" inputmode="numeric" value="${fmtInit(String(extra))}" oninput="fmtAmountInput(this,v=>simExtra=v)" style="font-size:22px;"/>
+    <div class="chips" style="margin-top:8px;">
+      ${[500000,1000000,1500000,3487899].map(v=>`<div class="chip${extra===v?" on":""}" onclick="simExtra=${v};render()">${v===3487899?"Prima $3.487.899":"+"+fmt(v)}</div>`).join("")}
+    </div>
+  </div>`;
+  if(!plan.debtFree&&plan.unpayable){
+    html+=`<div class="card card-warn"><div style="font-size:13px;color:#ef5350;font-weight:600;margin-bottom:4px;">⚠️ Con este abono, «${plan.unpayable.desc}» sigue creciendo</div><div style="font-size:12px;color:#8080a0;line-height:1.5;">Su cuota mínima no cubre el interés. Sube el abono a por lo menos ${fmt(plan.unpayable.need)}/mes para empezar a reducir esa deuda.</div></div>`;
+  }else{
+    const mesesAhorro=base.months-plan.months;
+    const interesAhorro=Math.max(0,base.totalInterest-plan.totalInterest);
+    html+=`<div class="card card-gold"><div style="display:flex;justify-content:space-around;text-align:center;gap:8px;">
+      <div style="flex:1;"><div class="fl">Libre de deudas en</div><div style="font-size:22px;font-weight:700;color:#c9a227;font-family:monospace;">${plan.months}<span style="font-size:12px;color:#8080a0;"> m</span></div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;">antes: ${base.months} m</div></div>
+      <div style="width:1px;background:#2a2040;"></div>
+      <div style="flex:1;"><div class="fl">Ahorras en interés</div><div style="font-size:20px;font-weight:700;color:#4caf80;font-family:monospace;">${fmt(interesAhorro)}</div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;">${mesesAhorro>0?mesesAhorro+" meses antes":"—"}</div></div>
+    </div>
+    ${plan.timeline.length>1?simSparkline(plan.timeline):""}
+    <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:8px;line-height:1.5;">Al saldar una deuda, su cuota + el abono ruedan a la siguiente (efecto ${strat==="avalanche"?"avalancha":"bola de nieve"}). Estimación sobre saldos actuales; deudas sin tasa se simulan a 0% y las sin plazo a ~12 meses.</div>
+    </div>`;
+  }
+  html+=`</div>`;
+  return html;
 }
 
 // ── Viajes ─────────────────────────────────────────────────────────────────
@@ -1519,7 +1940,8 @@ async function doSaveEntry(){
   const spB=d.split.B/100,spA=d.split.A/100;
   const cats=f.user==="shared"?(d.cats.shared||[]):(d.cats.personal||[]);
   const cat=f.category||cats[0]||"";
-  const entry={id:editId||Date.now(),date:f.date,type:f.type,user:f.user,category:cat,description:f.description||cat,amount:Number(f.amount),paidBy:f.type==="expense"&&f.user==="shared"?f.paidBy:null,debtMonths:f.type==="debt"?Number(f.debtMonths):null,debtStart:f.type==="debt"?f.debtStart:null,note:f.note||null,isRecurring:f.isRecurring||false,registeredBy:f.registeredBy||"A",incomeSource:f.type==="income"?(f.incomeSource||"nomina"):null};
+  const hasRate=f.type==="debt"&&f.rate!==""&&f.rate!=null&&!isNaN(Number(f.rate));
+  const entry={id:editId||Date.now(),date:f.date,type:f.type,user:f.user,category:cat,description:f.description||cat,amount:Number(f.amount),paidBy:f.type==="expense"&&f.user==="shared"?f.paidBy:null,debtMonths:f.type==="debt"?Number(f.debtMonths):null,debtStart:f.type==="debt"?f.debtStart:null,note:f.note||null,isRecurring:f.isRecurring||false,registeredBy:f.registeredBy||"A",incomeSource:f.type==="income"?(f.incomeSource||"nomina"):null,rate:hasRate?Number(f.rate):null,rateType:hasRate?(f.rateType||"monthly"):null,priorityLock:f.type==="debt"?!!f.priorityLock:false};
   let entries=[...(d.entries||[])];
   if(editId){entries=entries.map(e=>e.id===editId?entry:e);}
   else{entries=[...entries,entry];}
@@ -1529,7 +1951,7 @@ async function doSaveEntry(){
   editId=null;
   await persist({...d,entries,recurring:rec});
   showToast(wasEdit?"✓ Actualizado":"✓ Guardado");
-  tab=wasEdit?"movimientos":"resumen";
+  if(wasEdit){moreTab="movimientos";tab="mas";}else{tab="resumen";}
 }
 
 function doEditEntry(id){
@@ -1537,7 +1959,7 @@ function doEditEntry(id){
   const e=d.entries.find(x=>x.id===Number(id)||x.id===id);
   if(!e)return;
   editId=e.id;
-  formState={type:e.type,user:e.user,category:e.category,description:e.description||"",amount:String(e.amount),date:e.date,paidBy:e.paidBy||"A",debtMonths:e.debtMonths||12,debtStart:e.debtStart||today(),note:e.note||"",isRecurring:false,registeredBy:e.registeredBy||"A",incomeSource:e.incomeSource||"nomina"};
+  formState={type:e.type,user:e.user,category:e.category,description:e.description||"",amount:String(e.amount),date:e.date,paidBy:e.paidBy||"A",debtMonths:e.debtMonths||12,debtStart:e.debtStart||today(),note:e.note||"",isRecurring:false,registeredBy:e.registeredBy||"A",incomeSource:e.incomeSource||"nomina",rate:e.rate!=null?String(e.rate):"",rateType:e.rateType||"monthly",priorityLock:!!e.priorityLock};
   tab="agregar";render();
 }
 
