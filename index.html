@@ -790,20 +790,27 @@ function renderBalanceDetail(d){
       ${allPayments.map(p=>`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#4db6ac;font-family:monospace;">${p.date} · ${p.from}→${p.to}${p.note?(" · "+p.note):""}</span><span style="font-size:10px;color:#4db6ac;font-family:monospace;">-${fmt(p.amount)}</span></div>`).join("")}
     </div>`:"";
   // Consolidado por proyecto (categoría): cuánto adelantó cada quién, y cómo se compensan.
+  // Incluye TODO lo que afecta computeBalance (gastos compartidos + abonos/transfers + settled
+  // legacy) para que el NETO cuadre exactamente con el balance real de arriba.
   const byCat={};
+  const bump=(k,adv)=>{if(!byCat[k])byCat[k]={paidA:0,total:0};byCat[k].adv=(byCat[k].adv||0)+adv;};
   shExp.forEach(e=>{
     const k=e.category||"Otro";
     if(!byCat[k])byCat[k]={total:0,paidA:0};
     byCat[k].total+=e.amount;
     if(e.paidBy==="A")byCat[k].paidA+=e.amount;
   });
-  const catRows=Object.entries(byCat).map(([k,v])=>({k,advA:Math.round(v.paidA-v.total*spA)}))
+  (d.entries||[]).filter(e=>e.type==="transfer").forEach(e=>bump(e.category||"Abonos",e.paidBy==="A"?e.amount:-e.amount));
+  (d.catSettled||[]).forEach(s=>bump(s.cat||"Ajustes",s.to==="B"?s.amount:-s.amount));
+  (d.settled||[]).forEach(s=>bump("Ajustes",s.to==="B"?s.amount:-s.amount));
+  const isAdjBucket=k=>k==="Abonos"||k==="Ajustes";
+  const catRows=Object.entries(byCat).map(([k,v])=>({k,advA:Math.round((v.paidA||0)-(v.total||0)*spA+(v.adv||0))}))
     .filter(x=>Math.abs(x.advA)>1).sort((a,b)=>Math.abs(b.advA)-Math.abs(a.advA));
   const netExp=catRows.reduce((s,x)=>s+x.advA,0); // >0: Marce adelantó (John le debe)
   const consolidadoHtml=catRows.length>0?`
     <div style="border-top:1px solid #1e1e3a22;margin-top:6px;padding-top:6px;">
       <div style="font-size:9px;color:#c9a227;font-family:monospace;text-transform:uppercase;margin-bottom:4px;">⚖️ Adelantos por proyecto (se compensan entre sí)</div>
-      ${catRows.map(x=>{const who=x.advA>0?d.names.A:d.names.B;const col=x.advA>0?"#64b5f6":"#ff8a65";return`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#8080a0;font-family:monospace;">${icon(x.k)} ${x.k}</span><span style="font-size:10px;color:${col};font-family:monospace;">${who} adelantó ${fmt(Math.abs(x.advA))}</span></div>`;}).join("")}
+      ${catRows.map(x=>{const who=x.advA>0?d.names.A:d.names.B;const col=x.advA>0?"#64b5f6":"#ff8a65";const lbl=isAdjBucket(x.k)?`${who} abonó`:`${who} adelantó`;const ic=isAdjBucket(x.k)?"💳":icon(x.k);return`<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:10px;color:#8080a0;font-family:monospace;">${ic} ${x.k}</span><span style="font-size:10px;color:${col};font-family:monospace;">${lbl} ${fmt(Math.abs(x.advA))}</span></div>`;}).join("")}
       <div style="display:flex;justify-content:space-between;padding:5px 0 0;margin-top:3px;border-top:1px solid #2a2040;"><span style="font-size:10px;color:#f0eff4;font-family:monospace;font-weight:700;">NETO tras compensar</span><span style="font-size:10px;color:#c9a227;font-family:monospace;font-weight:700;">${Math.abs(netExp)<1?"equilibrado ✓":(netExp>0?d.names.B+" debe "+fmt(netExp):d.names.A+" debe "+fmt(-netExp))}</span></div>
     </div>`:"";
   return`<div style="background:#0e0e1a;border-radius:8px;padding:8px 10px;margin-bottom:10px;max-height:340px;overflow-y:auto;border:1px solid #1e1e3a;">
