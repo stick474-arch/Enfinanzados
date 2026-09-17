@@ -124,6 +124,7 @@ function emptyState(){
     cats:{shared:["Casa / Arriendo","Parqueadero","Servicios","Mercado","Deuda banco","Otro compartido"],
     personal:["Transporte","Ropa","Salud","Entretenimiento","Deuda personal","Otro personal"]},
     goals:[],split:{A:50,B:50},recurring:[],budgets:{},loans:[],viajes:[],catSettled:[],trash:[],
+    terceros:[],
     plan:{strategy:"avalanche",extraSim:500000,allocAhorro:0,allocDeuda:0}};
 }
 
@@ -205,7 +206,7 @@ function nm(u){const n=D().names;return u==="A"?n.A:u==="B"?n.B:"Compartido";}
 function D(){return localData||emptyState();}
 function migrate(d){
   const e=emptyState();
-  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled","trash","plan"].forEach(k=>{if(!d[k])d[k]=e[k];});
+  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled","trash","plan","terceros"].forEach(k=>{if(!d[k])d[k]=e[k];});
   if(!d.plan.strategy)d.plan.strategy="avalanche";
   return d;
 }
@@ -297,7 +298,12 @@ let analisisTab="graficas"; // "graficas" | "proyeccion"
 let configTab="ajustes"; // "ajustes" | "prestamos"
 let asesorTab="prioridad"; // "prioridad" | "plan" | "simular" | "proyeccion"
 let moreTab="movimientos"; // "movimientos" | "viajes" | "graficas" | "config"
+let deudasTab="mias"; // "mias" | "porcobrar"
 let simExtra=500000; // monto de abono extra en el simulador
+let showNewTercero=false;
+let editTerceroId=null;
+let terceroAbono={};
+let newTercero={name:"",amount:"",rate:"",rateType:"monthly",interestOnly:true,date:today(),dueDate:"",note:""};
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
 const TABS=[["asesor","🧭","Asesor"],["resumen","📊","Inicio"],["agregar","＋","Registrar"],["deudas","🏦","Deudas"],["mas","⋯","Más"]];
@@ -350,8 +356,26 @@ function rateEquivText(rate,type){
 }
 function debtsOf(d){return (d.entries||[]).filter(e=>e.type==="debt");}
 function pendingOf(d,de){
-  const paid=paymentsForDebt(d,de).reduce((s,p)=>s+(p.amount||0),0);
-  return Math.max(0,de.amount-paid);
+  if(de.closed)return 0; // refinanciada / absorbida por otra deuda
+  const pays=paymentsForDebt(d,de).slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  const m=monthlyRateOf(de);
+  if(m==null||m<=0){
+    const paid=pays.reduce((s,p)=>s+(p.amount||0),0);
+    return Math.max(0,de.amount-paid);
+  }
+  // Con tasa: amortización real — cada mes corre interés sobre el saldo y el pago
+  // cubre primero ese interés; solo el excedente abona a capital.
+  let bal=de.amount;
+  let lastKey=(de.debtStart||de.date||thisMonth()).slice(0,7);
+  const accrue=(fromKey,toKey)=>{const n=Math.max(0,moElapsed(fromKey,toKey));for(let i=0;i<n&&i<600;i++)bal*=(1+m);};
+  pays.forEach(p=>{
+    const k=(p.date||lastKey).slice(0,7);
+    accrue(lastKey,k);
+    bal-=(p.amount||0);
+    lastKey=k;
+  });
+  accrue(lastKey,thisMonth());
+  return Math.max(0,Math.round(bal));
 }
 function myShareFactor(d,de){const sp=d.split||{A:50,B:50};return de.user==="shared"?(sp.B/100):(de.user==="B"?1:0);}
 function minPaymentOf(d,de){
@@ -404,11 +428,11 @@ function fixedOutflowsForMonth(d,monthKey){
       fixed+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
     }
   });
-  (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring).forEach(e=>{
+  (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring&&!e.closed).forEach(e=>{
     const startKey=(e.debtStart||e.date||"").slice(0,7);if(!startKey)return;
     const el=moElapsed(startKey,monthKey);if(el<0||el>=e.debtMonths)return;
     if(recCats.has(e.category+"|"+(e.description||"")))return;
-    const monthly=Math.round(e.amount/e.debtMonths);
+    const monthly=minPaymentOf(d,e);
     fixed+=e.user==="shared"?monthly*(sp.B/100):(e.user==="B"?monthly:0);
   });
   return Math.round(fixed);
@@ -521,6 +545,18 @@ function advisorInsights(d){
   const netLoanA=activeLoans.reduce((s,l)=>l.from==="A"?s+(l.amount-l.paid):s-(l.amount-l.paid),0);
   if(Math.abs(netLoanA)>1){const who=netLoanA<0?d.names.A+" le debe a "+d.names.B:d.names.B+" le debe a "+d.names.A;
     out.push({sev:"info",icon:"🤝",title:"Préstamo entre ustedes",body:who+" "+fmt(Math.abs(netLoanA))+".",cta:{tab:"mas",moreTab:"config",configTab:"prestamos",label:"Ver préstamos →"}});}
+  // Cuentas por cobrar: capital que vuelve + interés mensual que entra
+  const porCobrar=totalPorCobrar(d);
+  if(porCobrar>0){
+    const intMes=ingresoInteresesMes(d);
+    const conFecha=tercerosActive(d).filter(t=>t.kind!=="debt"&&t.dueDate).sort((a,b)=>a.dueDate.localeCompare(b.dueDate))[0];
+    const topDeuda=(withRate[0]||rk[0]);
+    out.push({sev:"ok",icon:"💰",title:"Te deben "+fmt(porCobrar),
+      body:(intMes>0?"Te entran "+fmt(intMes)+"/mes en intereses. ":"")+
+        (conFecha?"El capital vuelve el "+conFecha.dueDate+". ":"")+
+        (topDeuda?"Cuando entre, abonarlo a "+topDeuda.de.description+" reduce fuerte tus intereses.":""),
+      cta:{tab:"deudas",deudasTab:"porcobrar",label:"Ver por cobrar →"}});
+  }
   const order={bad:0,warn:1,info:2,ok:3};
   out.sort((a,b)=>order[a.sev]-order[b.sev]);
   return out;
@@ -531,7 +567,183 @@ function insightCta(cta){
   if(cta.asesorTab)s+="asesorTab='"+cta.asesorTab+"';";
   if(cta.moreTab)s+="moreTab='"+cta.moreTab+"';";
   if(cta.configTab)s+="configTab='"+cta.configTab+"';";
+  if(cta.deudasTab)s+="deudasTab='"+cta.deudasTab+"';";
   return s+"render()";
+}
+
+// ═══ TERCEROS / POR COBRAR (dinero que te deben personas fuera de la pareja) ══
+function tercerosActive(d){return (d.terceros||[]).filter(t=>t.status!=="settled");}
+function terceroPending(t){return Math.max(0,(t.amount||0)-(t.paid||0));}
+function terceroMonthlyRate(t){
+  if(t.rate==null||t.rate===""||isNaN(Number(t.rate)))return 0;
+  const r=Number(t.rate)/100;if(r<0)return 0;
+  return t.rateType==="ea"?Math.pow(1+r,1/12)-1:r;
+}
+function terceroMonthlyInterest(t){return Math.round(terceroPending(t)*terceroMonthlyRate(t));}
+function terceroInterestPaid(t){return (t.payments||[]).filter(p=>p.kind==="interes").reduce((s,p)=>s+(p.amount||0),0);}
+// Total que te deben (capital pendiente de todas las cuentas por cobrar)
+function totalPorCobrar(d){return tercerosActive(d).filter(t=>t.kind!=="debt").reduce((s,t)=>s+terceroPending(t),0);}
+// Ingreso mensual esperado por intereses de terceros
+function ingresoInteresesMes(d){return tercerosActive(d).filter(t=>t.kind!=="debt").reduce((s,t)=>s+terceroMonthlyInterest(t),0);}
+
+async function doAddTercero(){
+  const amt=Number(newTercero.amount);
+  if(!newTercero.name.trim()){showToast("⚠️ Ponle un nombre");return;}
+  if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const d=D();
+  const hasRate=newTercero.rate!==""&&newTercero.rate!=null&&!isNaN(Number(newTercero.rate));
+  const t={id:editTerceroId||Date.now(),kind:"receivable",name:newTercero.name.trim(),
+    amount:amt,paid:editTerceroId?((d.terceros||[]).find(x=>x.id===editTerceroId)||{}).paid||0:0,
+    rate:hasRate?Number(newTercero.rate):null,rateType:hasRate?(newTercero.rateType||"monthly"):null,
+    interestOnly:!!newTercero.interestOnly,date:newTercero.date,dueDate:newTercero.dueDate||null,
+    note:newTercero.note||null,status:"active",
+    payments:editTerceroId?((d.terceros||[]).find(x=>x.id===editTerceroId)||{}).payments||[]:[]};
+  const list=editTerceroId?(d.terceros||[]).map(x=>x.id===editTerceroId?t:x):[...(d.terceros||[]),t];
+  await persist({...d,terceros:list});
+  const wasEdit=!!editTerceroId;
+  editTerceroId=null;showNewTercero=false;
+  newTercero={name:"",amount:"",rate:"",rateType:"monthly",interestOnly:true,date:today(),dueDate:"",note:""};
+  showToast(wasEdit?"✓ Actualizado":"✓ Préstamo registrado");
+}
+function doEditTercero(id){
+  const d=D();const tid=Number(id)||id;
+  const t=(d.terceros||[]).find(x=>x.id===tid);if(!t)return;
+  newTercero={name:t.name,amount:String(t.amount),rate:t.rate!=null?String(t.rate):"",
+    rateType:t.rateType||"monthly",interestOnly:!!t.interestOnly,date:t.date,
+    dueDate:t.dueDate||"",note:t.note||""};
+  editTerceroId=tid;showNewTercero=true;render();
+}
+// Cobrar intereses: entra plata real -> se registra como ingreso y queda en el historial.
+async function doTerceroCobrarInteres(id){
+  const d=D();const tid=Number(id)||id;
+  const t=(d.terceros||[]).find(x=>x.id===tid);if(!t)return;
+  const amt=terceroMonthlyInterest(t);
+  if(amt<=0){showToast("Este préstamo no cobra intereses");return;}
+  const list=(d.terceros||[]).map(x=>x.id===tid?{...x,payments:[...(x.payments||[]),{date:today(),amount:amt,kind:"interes"}]}:x);
+  const inc={id:Date.now(),date:today(),type:"income",user:"B",category:"Intereses",
+    description:"Interés préstamo "+t.name,amount:amt,paidBy:null,note:null,
+    isRecurring:false,registeredBy:"B",incomeSource:"otro"};
+  await persist({...d,terceros:list,entries:[...(d.entries||[]),inc]});
+  showToast("✓ Interés de "+fmt(amt)+" cobrado");
+}
+// Cobrar capital: recuperas TU dinero (no es ingreso nuevo, no infla el plan del mes).
+async function doTerceroCobrarCapital(id){
+  const d=D();const tid=Number(id)||id;
+  const t=(d.terceros||[]).find(x=>x.id===tid);if(!t)return;
+  const raw=terceroAbono[tid];
+  const amt=raw?Number(raw):terceroPending(t);
+  if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const applied=Math.min(amt,terceroPending(t));
+  const newPaid=(t.paid||0)+applied;
+  const list=(d.terceros||[]).map(x=>x.id===tid?{...x,paid:newPaid,
+    payments:[...(x.payments||[]),{date:today(),amount:applied,kind:"capital"}],
+    status:newPaid>=x.amount?"settled":"active"}:x);
+  await persist({...d,terceros:list});
+  terceroAbono[tid]="";
+  showToast(newPaid>=t.amount?"🎉 "+t.name+" te pagó todo":"✓ "+fmt(applied)+" de capital recuperado");
+}
+function doDeleteTercero(id){
+  const tid=Number(id)||id;
+  if(!confirmDelete||confirmDelete.type!=="tercero"||confirmDelete.id!==tid){confirmDelete={type:"tercero",id:tid};setTimeout(()=>{confirmDelete=null;render();},3000);render();return;}
+  confirmDelete=null;
+  const d=D();
+  const t=(d.terceros||[]).find(x=>x.id===tid);if(!t)return;
+  persist({...d,terceros:(d.terceros||[]).filter(x=>x.id!==tid),trash:[...(d.trash||[]),{...t,_kind:"tercero",_deletedAt:today()}]});
+  showToast("🗑️ Movido a papelera");
+}
+
+function renderPorCobrar(){
+  const d=D();
+  const list=(d.terceros||[]).filter(t=>t.kind!=="debt");
+  const activos=list.filter(t=>t.status!=="settled");
+  const saldados=list.filter(t=>t.status==="settled");
+  const totalCap=activos.reduce((s,t)=>s+terceroPending(t),0);
+  const totalInt=activos.reduce((s,t)=>s+terceroMonthlyInterest(t),0);
+  let html=`<div class="sec">`;
+  if(activos.length){
+    html+=`<div class="card card-blue"><div class="ct">Resumen · te deben</div>
+      <div style="display:flex;justify-content:space-around;text-align:center;">
+        <div><div class="fl">Capital por cobrar</div><div style="font-size:17px;font-weight:700;color:#4caf80;font-family:monospace;">${fmt(totalCap)}</div></div>
+        <div style="width:1px;background:#1e1e3a;"></div>
+        <div><div class="fl">Intereses / mes</div><div style="font-size:17px;font-weight:700;color:#4db6ac;font-family:monospace;">${fmt(totalInt)}</div></div>
+      </div></div>`;
+  }
+  html+=`<button class="btn" onclick="showNewTercero=!showNewTercero;if(!showNewTercero){editTerceroId=null;}render()">${showNewTercero?"✕ Cancelar":"➕ Registrar préstamo que hiciste"}</button>`;
+  if(showNewTercero){
+    const nt=newTercero;
+    html+=`<div class="card" style="border:1px solid #4caf8044;">
+      <div class="ct">${editTerceroId?"Editar préstamo":"Le presté a…"}</div>
+      <label class="fl">¿A quién?</label>
+      <input type="text" placeholder="Ej: Papá, Hermana…" value="${(nt.name||"").replace(/"/g,"&quot;")}" oninput="newTercero.name=this.value"/>
+      <label class="fl">Monto prestado (COP)</label>
+      <input class="inp-big" type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(nt.amount)}" oninput="fmtAmountInput(this,v=>newTercero.amount=v)"/>
+      <label class="fl">Interés que te paga (opcional)</label>
+      <div class="chips" style="margin-bottom:8px;">
+        <div class="chip${(nt.rateType||"monthly")==="monthly"?" on":""}" onclick="newTercero.rateType='monthly';render()">Mensual</div>
+        <div class="chip${nt.rateType==="ea"?" on":""}" onclick="newTercero.rateType='ea';render()">E.A.</div>
+      </div>
+      <input type="text" inputmode="decimal" placeholder="Ej: 1.6" value="${nt.rate!=null?nt.rate:""}" oninput="newTercero.rate=this.value.replace(/[^0-9.]/g,'');var s=document.getElementById('t-rate-eq');if(s)s.textContent=rateEquivText(newTercero.rate,newTercero.rateType||'monthly');"/>
+      <div id="t-rate-eq" style="font-size:11px;color:#4caf80;font-family:monospace;margin:-4px 0 10px;">${rateEquivText(nt.rate,nt.rateType||"monthly")}</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 12px;background:#0e0e1a;border-radius:10px;border:1px solid #1e1e3a;">
+        <input type="checkbox" id="t-io" ${nt.interestOnly?"checked":""} onchange="newTercero.interestOnly=this.checked"/>
+        <label for="t-io" style="font-size:13px;color:#8080a0;cursor:pointer;">Solo paga intereses cada mes; el capital completo al final</label>
+      </div>
+      <label class="fl">Fecha del préstamo</label>
+      <input type="date" value="${nt.date}" onchange="newTercero.date=this.value"/>
+      <label class="fl">¿Cuándo te devuelve el capital? (opcional)</label>
+      <input type="date" value="${nt.dueDate||""}" onchange="newTercero.dueDate=this.value"/>
+      <label class="fl">Nota</label>
+      <input type="text" placeholder="Opcional…" value="${(nt.note||"").replace(/"/g,"&quot;")}" oninput="newTercero.note=this.value"/>
+      <button class="btn" onclick="doAddTercero()" ${saving?"disabled":""}>${editTerceroId?"💾 Guardar cambios":"✓ Registrar"}</button>
+    </div>`;
+  }
+  if(activos.length===0&&!showNewTercero){
+    html+=`<div class="card-quiet" style="text-align:center;padding:30px 16px;"><div style="font-size:38px;margin-bottom:10px;">💰</div><div style="font-size:14px;color:#8080a0;margin-bottom:6px;">Nadie te debe (o aún no lo registras)</div><div style="font-size:12px;color:#4a4a6a;">Aquí llevas el dinero que prestaste a familiares o amigos, con sus intereses.</div></div>`;
+  }
+  activos.forEach(t=>{
+    const pend=terceroPending(t);
+    const mi=terceroMonthlyInterest(t);
+    const intPaid=terceroInterestPaid(t);
+    const pct=t.amount>0?Math.min(100,(t.paid||0)/t.amount*100):0;
+    const del=confirmDelete&&confirmDelete.type==="tercero"&&confirmDelete.id===t.id;
+    html+=`<div class="card">
+      <div class="row" style="margin-bottom:4px;">
+        <span style="font-size:15px;font-weight:700;">💰 ${t.name}</span>
+        ${t.rate!=null?`<span class="pill-rate" style="background:#4caf8018;border-color:#4caf8044;color:#4caf80;">${(terceroMonthlyRate(t)*100).toFixed(2)}%/mes</span>`:""}
+      </div>
+      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:10px;">Prestado ${t.date}${t.dueDate?` · devuelve capital el ${t.dueDate}`:""}${t.note?" · "+t.note:""}</div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:10px;">
+        <div><div class="fl">Capital</div><div style="font-size:16px;font-weight:700;font-family:monospace;">${fmt(t.amount)}</div></div>
+        <div style="text-align:center;"><div class="fl">Te falta cobrar</div><div style="font-size:16px;font-weight:700;color:#4caf80;font-family:monospace;">${fmt(pend)}</div></div>
+        ${mi>0?`<div style="text-align:right;"><div class="fl">Interés/mes</div><div style="font-size:16px;font-weight:700;color:#4db6ac;font-family:monospace;">${fmt(mi)}</div></div>`:""}
+      </div>
+      ${pct>0?`<div class="bar-wrap"><div class="bar" style="width:${pct}%;background:#4caf80;"></div></div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">${Math.round(pct)}% del capital devuelto</div>`:""}
+      ${intPaid>0?`<div style="font-size:11px;color:#4db6ac;font-family:monospace;margin-bottom:8px;">✓ Intereses cobrados hasta ahora: ${fmt(intPaid)}</div>`:""}
+      <div style="background:#0e0e1a;border-radius:10px;padding:12px;border:1px solid #1e1e3a;">
+        <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">REGISTRAR COBRO</div>
+        ${mi>0?`<button class="btn-sm" style="background:#1e2d2a;border:1px solid #4db6ac44;color:#4db6ac;font-size:11px;margin-bottom:8px;" onclick="doTerceroCobrarInteres(${t.id})">＋ Me pagó el interés del mes (${fmt(mi)})</button>`:""}
+        <div style="display:flex;gap:8px;">
+          <input style="flex:1;margin-bottom:0;font-size:13px;" type="text" inputmode="numeric" placeholder="Abono a capital…" value="${fmtInit(terceroAbono[t.id]||"")}" oninput="fmtAmountInput(this,v=>terceroAbono[${t.id}]=v)"/>
+          <button class="btn-sm" style="background:#4caf80;color:#fff;flex-shrink:0;" onclick="doTerceroCobrarCapital(${t.id})">Cobrar</button>
+        </div>
+        <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:6px;">Vacío = cobrar todo lo pendiente (${fmt(pend)})</div>
+      </div>
+      ${(t.payments||[]).length?`<div style="margin-top:12px;"><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">HISTORIAL</div>
+        ${(t.payments||[]).slice().reverse().map(p=>`<div class="row" style="margin-bottom:4px;"><span style="font-size:11px;color:#6060a0;font-family:monospace;">${p.date} · ${p.kind==="interes"?"interés":"capital"}</span><span style="font-size:11px;color:${p.kind==="interes"?"#4db6ac":"#4caf80"};font-family:monospace;">+${fmt(p.amount)}</span></div>`).join("")}
+      </div>`:""}
+      <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:14px;">
+        <span style="font-size:11px;cursor:pointer;color:#64b5f6;font-family:monospace;" onclick="doEditTercero(${t.id})">✏️ editar</span>
+        <span style="font-size:11px;cursor:pointer;color:${del?"#ef5350":"#4a4a6a"};font-family:monospace;" onclick="doDeleteTercero(${t.id})">${del?"¿Eliminar? Toca de nuevo":"🗑️ eliminar"}</span>
+      </div>
+    </div>`;
+  });
+  if(saldados.length){
+    html+=`<div class="card"><div class="ct">✓ Ya te pagaron</div>
+      ${saldados.map(t=>`<div class="row" style="padding:8px 0;border-bottom:1px solid #1e1e3a;"><div><div style="font-size:13px;">${t.name}</div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;">${t.date}${terceroInterestPaid(t)>0?" · intereses "+fmt(terceroInterestPaid(t)):""}</div></div><div style="text-align:right;"><div style="font-size:13px;color:#4caf80;font-family:monospace;font-weight:600;">${fmt(t.amount)}</div><div style="font-size:10px;color:#4caf80;">✓ cobrado</div></div></div>`).join("")}
+    </div>`;
+  }
+  html+=`</div>`;
+  return html;
 }
 
 // ── Resumen ────────────────────────────────────────────────────────────────
@@ -873,7 +1085,7 @@ function paymentGroups(d,de){
 // usa el monto de ESE mes (respeta primas/cesantías/variaciones); si no, usa el promedio plano.
 function cuotaForMonth(d,de,monthKey){
   const months=de.debtMonths||1;
-  const flat=months>1?Math.round(de.amount/months):de.amount;
+  const flat=(de.minPayment&&Number(de.minPayment)>0)?Number(de.minPayment):(months>1?Math.round(de.amount/months):de.amount);
   const rec=(d.recurring||[]).find(r=>r.type==="debt"&&r.category===de.category&&r.description===de.description);
   if(rec&&rec.overrides&&rec.overrides[monthKey]!=null)return ovTotal(rec.overrides[monthKey],flat);
   return flat;
@@ -892,29 +1104,34 @@ function renderDebtsCard(debts,d){
     const isQp=qpDebtId===de.id;
     const pays=paymentsForDebt(d,de);
     const paid=pays.reduce((s,p)=>s+(p.amount||0),0);
-    const pending=Math.max(0,de.amount-paid);
-    const pct=de.amount>0?Math.min(100,paid/de.amount*100):0;
-    const settled=pending<1&&paid>0;
+    const isClosed=!!de.closed;
+    const pending=pendingOf(d,de);
+    const mRate=monthlyRateOf(de);
+    const hasRate=mRate!=null&&mRate>0;
+    const pct=de.amount>0?Math.min(100,Math.max(0,(de.amount-pending)/de.amount*100)):0;
+    const settled=!isClosed&&pending<1&&paid>0;
     const paidA=isShared?pays.filter(p=>p.paidBy==="A").reduce((s,p)=>s+p.amount,0):(de.user==="A"?paid:0);
     const paidB=isShared?pays.filter(p=>p.paidBy==="B").reduce((s,p)=>s+p.amount,0):(de.user==="B"?paid:0);
     const cuotasPaid=flatCuota>0?Math.min(months,Math.round(paid/flatCuota)):0;
-    const barCol=settled?"#4caf80":"#c9a227";
+    const barCol=isClosed?"#6060a0":(settled?"#4caf80":"#c9a227");
     const isExp=debtExpandedId===de.id;
-    html+=`<div style="padding:10px 0;border-bottom:1px solid #1e1e3a22;">
+    html+=`<div style="padding:10px 0;border-bottom:1px solid #1e1e3a22;${isClosed?"opacity:.6;":""}">
       <div class="row" style="margin-bottom:4px;">
-        <span style="font-size:13px;font-weight:600;">${icon(de.category)} ${de.description}${settled?` <span style="font-size:10px;color:#4caf80;">✅</span>`:""}</span>
+        <span style="font-size:13px;font-weight:600;">${icon(de.category)} ${de.description}${isClosed?` <span style="font-size:10px;color:#6060a0;">🔄</span>`:settled?` <span style="font-size:10px;color:#4caf80;">✅</span>`:""}</span>
         <span style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
           <span class="tag" style="background:${isShared?"#c9a22718":"#1e1e3a"};color:${isShared?"#c9a227":"#6060a0"};border:1px solid ${isShared?"#c9a22744":"#2a2a4a"};">${isShared?"Compartida":nm(de.user)}</span>
           <span style="cursor:pointer;font-size:13px;" title="Editar deuda" onclick="doEditEntry(${de.id})">✏️</span>
         </span>
       </div>
-      <div class="bar-wrap" style="margin:6px 0 4px;"><div class="bar" style="width:${pct}%;background:${barCol};"></div></div>
+      <div class="bar-wrap" style="margin:6px 0 4px;"><div class="bar" style="width:${isClosed?100:pct}%;background:${barCol};"></div></div>
       <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a4a6a;font-family:monospace;margin-bottom:6px;">
         <span style="color:#4caf80;">Pagado ${fmtS(paid)}</span>
-        <span>${Math.round(pct)}%${months>1?` · cuota ${cuotasPaid}/${months}`:""}</span>
-        <span style="color:${pending>0?"#ef5350":"#4caf80"};">Falta ${fmtS(pending)}</span>
+        <span>${isClosed?"refinanciada":`${Math.round(pct)}%${months>1?` · cuota ${cuotasPaid}/${months}`:""}`}</span>
+        <span style="color:${pending>0?"#ef5350":"#4caf80"};">${isClosed?"—":"Falta "+fmtS(pending)}</span>
       </div>
-      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">Total: ${fmtS(de.amount)}${months>1?` · Cuota este mes ${fmtS(cuota)} · ${months} meses`:""}</div>
+      <div style="font-size:11px;color:#4a4a6a;font-family:monospace;margin-bottom:8px;">${isClosed?`Capital original: ${fmtS(de.amount)}`:`Total: ${fmtS(de.amount)}${months>1?` · Cuota este mes ${fmtS(cuota)} · ${months} meses`:""}`}</div>
+      ${isClosed&&de.closedNote?`<div style="font-size:11px;color:#6060a0;font-family:monospace;margin-bottom:8px;">🔄 ${de.closedNote}</div>`:""}
+      ${!isClosed&&hasRate?`<div style="font-size:10px;color:#c9a227;font-family:monospace;margin-bottom:8px;">${rateLabel(de)} · interés de este mes ≈ ${fmtS(Math.round(pending*mRate))}<br><span style="color:#4a4a6a;">El saldo ya descuenta intereses corridos, por eso "Pagado + Falta" no suma el total.</span></div>`:""}
       ${isShared&&(paidA>0||paidB>0)?`<div style="display:flex;gap:8px;margin-bottom:8px;">
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #64b5f622;"><div style="font-size:9px;color:#64b5f6;font-family:monospace;text-transform:uppercase;">${d.names.A} ha puesto</div><div style="font-size:13px;font-weight:700;color:#64b5f6;font-family:monospace;">${fmtS(paidA)}</div></div>
         <div style="flex:1;background:#0e0e1a;border-radius:8px;padding:6px 10px;border:1px solid #ff8a6522;"><div style="font-size:9px;color:#ff8a65;font-family:monospace;text-transform:uppercase;">${d.names.B} ha puesto</div><div style="font-size:13px;font-weight:700;color:#ff8a65;font-family:monospace;">${fmtS(paidB)}</div></div>
@@ -946,6 +1163,10 @@ function renderDebtsCard(debts,d){
         out+=`</div>`;
         return out;
       })()}`;
+    if(isClosed){
+      html+=`<div style="font-size:12px;color:#6060a0;text-align:center;padding:4px;">🔄 Cerrada — ya no genera cuotas</div></div>`;
+      return;
+    }
     if(settled){
       html+=`<div style="font-size:12px;color:#4caf80;text-align:center;padding:4px;">✅ Deuda saldada</div></div>`;
       return;
@@ -1186,9 +1407,12 @@ function renderMas(){
 }
 function renderDeudas(){
   const d=D();
+  const nPorCobrar=tercerosActive(d).filter(t=>t.kind!=="debt").length;
+  const bar=subTabBar([["mias","🏦","Mis deudas"],["porcobrar","💰",`Por cobrar${nPorCobrar>0?" ("+nPorCobrar+")":""}`]],deudasTab,"deudasTab");
+  if(deudasTab==="porcobrar")return bar+renderPorCobrar();
   const debts=(d.entries||[]).filter(e=>e.type==="debt");
-  if(debts.length===0)return`<div class="sec"><div class="card-quiet" style="text-align:center;padding:32px 16px;"><div style="font-size:38px;margin-bottom:10px;">🏦</div><div style="font-size:14px;color:#8080a0;margin-bottom:6px;">Aún no registras deudas</div><div style="font-size:12px;color:#4a4a6a;margin-bottom:14px;">Agrégala para que el asesor te ayude a priorizar y pagar menos intereses.</div><button class="btn" style="max-width:280px;margin:0 auto;" onclick="resetForm();formState.type='debt';tab='agregar';render()">＋ Registrar deuda</button></div></div>`;
-  return `<div class="sec">`+renderDebtsCard(debts,d)+`</div>`;
+  if(debts.length===0)return bar+`<div class="sec"><div class="card-quiet" style="text-align:center;padding:32px 16px;"><div style="font-size:38px;margin-bottom:10px;">🏦</div><div style="font-size:14px;color:#8080a0;margin-bottom:6px;">Aún no registras deudas</div><div style="font-size:12px;color:#4a4a6a;margin-bottom:14px;">Agrégala para que el asesor te ayude a priorizar y pagar menos intereses.</div><button class="btn" style="max-width:280px;margin:0 auto;" onclick="resetForm();formState.type='debt';tab='agregar';render()">＋ Registrar deuda</button></div></div>`;
+  return bar+`<div class="sec">`+renderDebtsCard(debts,d)+`</div>`;
 }
 
 // ── Asesor ─────────────────────────────────────────────────────────────────
@@ -1279,6 +1503,16 @@ function renderAsesorPlan(d){
     html+=`<div class="card-quiet"><div class="row" style="margin:0 0 6px;"><span style="font-size:12px;color:#8080a0;">🛡️ Fondo de emergencia (meta 3 meses)</span><span style="font-size:12px;font-family:monospace;color:#4db6ac;">${fmt(feNow)} / ${fmt(feTarget)}</span></div><div class="bar-wrap"><div class="bar" style="width:${feTarget>0?Math.min(100,feNow/feTarget*100):0}%;background:#4db6ac;"></div></div><div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:4px;">Gasto base de vida: ${fmt(living)}/mes. Crea una meta llamada "Fondo de emergencia" para llevar el registro.</div></div>`;
   }else if(alloc.deficit){
     html+=`<div class="card card-warn"><div style="font-size:13px;color:#ef5350;font-weight:600;margin-bottom:4px;">⚠️ Déficit este mes</div><div style="font-size:12px;color:#8080a0;line-height:1.5;">Tus obligaciones fijas (${fmt(cp.fixed)}) superan tu ingreso (${fmt(cp.income)}). Considera renegociar cuotas, reducir gastos variables o posponer abonos extra.</div></div>`;
+  }
+  const porCobrar=totalPorCobrar(d);
+  if(porCobrar>0){
+    const intMes=ingresoInteresesMes(d);
+    const items=tercerosActive(d).filter(t=>t.kind!=="debt");
+    html+=`<div class="card card-blue"><div class="ct">💰 Dinero que te deben (no está en tu bolsillo aún)</div>
+      ${items.map(t=>`<div class="row" style="margin-bottom:4px;"><span style="font-size:12px;color:#8080a0;">${t.name}${t.dueDate?` <span style="font-size:10px;color:#4a4a6a;font-family:monospace;">· ${t.dueDate}</span>`:""}</span><span style="font-size:13px;font-weight:700;color:#4caf80;font-family:monospace;">${fmt(terceroPending(t))}</span></div>`).join("")}
+      ${intMes>0?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e2a3a;display:flex;justify-content:space-between;"><span style="font-size:12px;color:#4db6ac;">Intereses que te entran cada mes</span><span style="font-size:13px;font-weight:700;color:#4db6ac;font-family:monospace;">+${fmt(intMes)}</span></div>`:""}
+      <div style="font-size:10px;color:#4a4a6a;font-family:monospace;margin-top:6px;line-height:1.5;">No se suma a tu disponible del mes hasta que te lo paguen. Regístralo en Deudas → Por cobrar cuando entre.</div>
+    </div>`;
   }
   const mo=mk.slice(5);
   if(mo==="06"||mo==="12"||mo==="02"){
@@ -2459,7 +2693,7 @@ async function doRestoreTrash(id){
   if(!it)return;
   const kind=it._kind;
   const clean={...it};delete clean._kind;delete clean._deletedAt;
-  const key=kind==="loan"?"loans":kind==="viaje"?"viajes":"entries";
+  const key=kind==="loan"?"loans":kind==="viaje"?"viajes":kind==="tercero"?"terceros":"entries";
   await persist({...d,[key]:[...(d[key]||[]),clean],trash:(d.trash||[]).filter(x=>x.id!==rid)});
   showToast("♻️ Restaurado");
 }
@@ -2492,7 +2726,7 @@ function renderPapelera(){
   }
   html+=`<div class="row" style="margin-bottom:10px;"><span style="font-size:11px;color:#4a4a6a;font-family:monospace;">${trash.length} elemento${trash.length!==1?"s":""}</span><span style="font-size:11px;cursor:pointer;color:${confirmDelete&&confirmDelete.type==="emptytrash"?"#ef5350":"#6060a0"};font-family:monospace;" onclick="doEmptyTrash()">${confirmDelete&&confirmDelete.type==="emptytrash"?"¿Vaciar todo?":"Vaciar papelera"}</span></div>`;
   trash.forEach(it=>{
-    const kindLbl=it._kind==="loan"?"🤝 Préstamo":it._kind==="viaje"?"✈️ Viaje":(it.type==="income"?"💰 Ingreso":it.type==="debt"?"🏦 Deuda":it.type==="transfer"?"💳 Abono":"💸 Gasto");
+    const kindLbl=it._kind==="loan"?"🤝 Préstamo":it._kind==="viaje"?"✈️ Viaje":it._kind==="tercero"?"💰 Por cobrar":(it.type==="income"?"💰 Ingreso":it.type==="debt"?"🏦 Deuda":it.type==="transfer"?"💳 Abono":"💸 Gasto");
     const title=it.name||it.description||it.category||"(sin nombre)";
     const amt=it.amount?fmtS(it.amount):"";
     const purging=confirmDelete&&confirmDelete.type==="purge"&&confirmDelete.id===it.id;
@@ -2696,14 +2930,14 @@ function buildProjection(d,n){
       }else income+=amt;
     });
     // Non-recurring debt entries with installments (no duplicate with recurring)
-    (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring).forEach(e=>{
+    (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring&&!e.closed).forEach(e=>{
       const startKey=(e.debtStart||e.date||"").slice(0,7);
       if(!startKey)return;
       const elapsed=moElapsed(startKey,key);
       if(elapsed<0||elapsed>=(e.debtMonths))return;
       // Skip if covered by a recurring item
       if(recDebtCats.has(e.category+"|"+(e.description||"")))return;
-      const monthly=Math.round(e.amount/(e.debtMonths));
+      const monthly=minPaymentOf(d,e);
       expenses+=monthly;
       if(e.user==="shared"){const a=Math.round(monthly*sp.A/100);shareA+=a;shareB+=monthly-a;shTotal+=monthly;shA+=a;}
       else if(e.user==="A")shareA+=monthly;else if(e.user==="B")shareB+=monthly;
