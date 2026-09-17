@@ -371,6 +371,8 @@ let simExtra=500000; // monto de abono extra en el simulador
 let showNewTercero=false;
 let editTerceroId=null;
 let terceroAbono={};
+let showAsigForm=false;
+let newAsig={name:"",amount:""};
 let newTercero={name:"",amount:"",rate:"",rateType:"monthly",interestOnly:true,date:today(),dueDate:"",note:""};
 
 // ── Nav ─────────────────────────────────────────────────────────────────────
@@ -510,6 +512,51 @@ function fixedOutflowsForMonth(d,monthKey){
   return Math.round(fixed);
 }
 function capitalPlan(d,monthKey){const income=incomeForMonth(d,monthKey);const fixed=fixedOutflowsForMonth(d,monthKey);return{income,fixed,free:income-fixed};}
+// ── Asignaciones: plata que apartas del disponible para destinos concretos ───
+function asignacionesMes(d,mk){return ((d.plan||{}).asignaciones||[]).filter(a=>a.month===mk);}
+function totalAsignado(d,mk){return asignacionesMes(d,mk).reduce((s,a)=>s+(Number(a.amount)||0),0);}
+// Lo que de verdad queda libre para maniobrar (disponible − lo ya apartado)
+function libreManiobra(d,mk){return capitalPlan(d,mk).free-totalAsignado(d,mk);}
+async function doAddAsignacion(){
+  const amt=Number(newAsig.amount);
+  if(!newAsig.name.trim()){showToast("⚠️ Ponle un nombre");return;}
+  if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const d=D();const mk=thisMonth();
+  const a={id:Date.now(),month:mk,name:newAsig.name.trim(),amount:amt,done:false,date:today()};
+  const plan={...(d.plan||{}),asignaciones:[...((d.plan||{}).asignaciones||[]),a]};
+  await persist({...d,plan});
+  newAsig={name:"",amount:""};showAsigForm=false;
+  showToast("✓ Apartaste "+fmt(amt)+" para "+a.name);
+}
+async function doQuickAsignacion(name,amt){
+  const d=D();const mk=thisMonth();
+  const a={id:Date.now(),month:mk,name:name,amount:Math.round(amt),done:false,date:today()};
+  const plan={...(d.plan||{}),asignaciones:[...((d.plan||{}).asignaciones||[]),a]};
+  await persist({...d,plan});
+  showToast("✓ Apartaste "+fmt(amt)+" para "+name);
+}
+async function doToggleAsignacion(id){
+  const d=D();const aid=Number(id)||id;
+  const plan={...(d.plan||{}),asignaciones:((d.plan||{}).asignaciones||[]).map(a=>a.id===aid?{...a,done:!a.done}:a)};
+  await persist({...d,plan});
+}
+async function doDeleteAsignacion(id){
+  const d=D();const aid=Number(id)||id;
+  const plan={...(d.plan||{}),asignaciones:((d.plan||{}).asignaciones||[]).filter(a=>a.id!==aid)};
+  await persist({...d,plan});
+  showToast("✓ Liberado");
+}
+async function doCopiarAsignaciones(){
+  const d=D();const mk=thisMonth();
+  const [y,m]=mk.split("-").map(Number);
+  const prev=m===1?`${y-1}-12`:`${y}-${String(m-1).padStart(2,"0")}`;
+  const src=((d.plan||{}).asignaciones||[]).filter(a=>a.month===prev);
+  if(!src.length){showToast("No hay apartados del mes pasado");return;}
+  const copies=src.map((a,i)=>({id:Date.now()+i,month:mk,name:a.name,amount:a.amount,done:false,date:today()}));
+  const plan={...(d.plan||{}),asignaciones:[...((d.plan||{}).asignaciones||[]),...copies]};
+  await persist({...d,plan});
+  showToast("✓ Copiados "+copies.length+" apartados de "+prev);
+}
 // Corrección 6: definición única de "gasto base de vida" (recurrentes de gasto, no deuda)
 function monthlyLivingCost(d,monthKey){
   const sp=d.split||{A:50,B:50};let c=0;
@@ -1035,13 +1082,13 @@ function renderResumen(){
   const activeLoans=(d.loans||[]).filter(l=>l.status==="active");
   const netLoanA=activeLoans.reduce((s,l)=>l.from==="A"?s+(l.amount-l.paid):s-(l.amount-l.paid),0);
   const totalNet=netBal+netLoanA;
-  // Disponible = plan real del mes (ingreso recurrente − obligaciones), no solo lo ya registrado.
-  const cpNow=capitalPlan(d,tm);
-  const dispB=cpNow.free;
+  // Libre = plan real del mes (ingreso recurrente − obligaciones − lo que ya apartaste).
+  const dispB=libreManiobra(d,tm);
+  const asigNow=totalAsignado(d,tm);
   const deudaTotal=debtsOf(d).reduce((s,de)=>s+pendingOf(d,de),0);
   const semHtml=`<div class="sem">
     <div class="sem-chip" onclick="showBalDetail=true;render()"><div class="k">Balance pareja</div><div class="v" style="color:${Math.abs(totalNet)<1?"var(--good)":"var(--gold)"};">${Math.abs(totalNet)<1?"al día ✓":fmt(Math.abs(totalNet))}</div></div>
-    <div class="sem-chip" onclick="tab='asesor';asesorTab='plan';render()"><div class="k">Te queda este mes</div><div class="v" style="color:${dispB>=0?"var(--good)":"var(--bad)"};">${fmt(dispB)}</div></div>
+    <div class="sem-chip" onclick="tab='asesor';asesorTab='plan';render()"><div class="k">Libre para maniobrar</div><div class="v" style="color:${dispB>=0?"var(--good)":"var(--bad)"};">${fmt(dispB)}</div>${asigNow>0?`<div style="font-size:9px;color:var(--ink3);font-family:var(--num);margin-top:1px;">${fmt(asigNow)} apartado</div>`:""}</div>
     <div class="sem-chip" onclick="tab='deudas';render()"><div class="k">Deuda total</div><div class="v" style="color:var(--bad);">${fmt(deudaTotal)}</div></div>
   </div>`;
   // Mini-deudas (top 3 por pendiente, solo lectura)
@@ -1575,21 +1622,88 @@ function renderAsesorPlan(d){
   const living=monthlyLivingCost(d,mk);const feTarget=emergencyTarget(d,3);const feNow=emergencyFundNow(d);
   const ratio=cp.income>0?Math.round((cp.fixed/cp.income)*100):0;
   const ratioCol=ratio<30?"var(--good)":ratio<=45?"var(--gold)":"var(--bad)";
+  const asigs=asignacionesMes(d,mk);
+  const asignado=totalAsignado(d,mk);
+  const libre=cp.free-asignado;
+  const libreCol=libre>0?"var(--good)":libre===0?"var(--ink2)":"var(--bad)";
   let html=`<div class="sec">`;
+  // ── Cascada: entra → obligaciones → apartado → libre ──
   html+=`<div class="card card-gold">
-    <div class="ct">Tu plan del mes — ${mk}</div>
-    <div class="row" style="margin-bottom:4px;"><span style="font-size:13px;color:var(--ink2);">💵 Ingreso</span><span style="font-size:16px;font-weight:700;color:var(--good);font-family:monospace;">${fmt(cp.income)}</span></div>
-    <div class="row" style="margin-bottom:4px;"><span style="font-size:13px;color:var(--ink2);">🔒 Obligaciones fijas (tu parte)</span><span style="font-size:14px;font-weight:700;color:var(--bad);font-family:monospace;">−${fmt(cp.fixed)}</span></div>
-    <div style="height:1px;background:var(--line2);margin:8px 0;"></div>
-    <div class="row" style="margin:0;"><span style="font-size:13px;color:var(--ink);font-weight:600;">${cp.free>=0?"🟢 Disponible":"🔴 Déficit"}</span><span style="font-size:19px;font-weight:700;color:${cp.free>=0?"var(--good)":"var(--bad)"};font-family:monospace;">${fmt(cp.free)}</span></div>
+    <div class="ct">Tu dinero este mes — ${mk}</div>
+    <div class="row" style="margin-bottom:5px;"><span style="font-size:13px;color:var(--ink2);">💵 Entra</span><span style="font-size:16px;font-weight:700;color:var(--good);font-family:monospace;">${fmt(cp.income)}</span></div>
+    <div class="row" style="margin-bottom:5px;"><span style="font-size:13px;color:var(--ink2);">🔒 Obligaciones fijas</span><span style="font-size:15px;font-weight:700;color:var(--bad);font-family:monospace;">−${fmt(cp.fixed)}</span></div>
+    ${asignado>0?`<div class="row" style="margin-bottom:5px;"><span style="font-size:13px;color:var(--ink2);">📌 Apartado por ti</span><span style="font-size:15px;font-weight:700;color:var(--teal);font-family:monospace;">−${fmt(asignado)}</span></div>`:""}
+    <div style="height:1px;background:var(--line2);margin:9px 0;"></div>
+    <div style="text-align:center;padding:4px 0 2px;">
+      <div class="fl" style="margin-bottom:2px;">${libre>=0?"Libre para maniobrar":"Te estás pasando"}</div>
+      <div class="big" style="color:${libreCol};">${fmt(libre)}</div>
+      <div style="font-size:11px;color:var(--ink3);margin-top:3px;">${libre>0?"Puedes gastar esto sin romper tu plan":libre===0?"Justo en el límite":"Reduce algún apartado o gasto"}</div>
+    </div>
+    ${asignado>0?`<div class="bar-wrap" style="height:8px;display:flex;gap:2px;background:none;">
+      <div style="flex:${Math.max(1,cp.fixed)};background:var(--bad);border-radius:6px;"></div>
+      <div style="flex:${Math.max(1,asignado)};background:var(--teal);border-radius:6px;"></div>
+      ${libre>0?`<div style="flex:${libre};background:var(--good);border-radius:6px;"></div>`:""}
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink3);font-family:monospace;"><span style="color:var(--bad);">fijos</span><span style="color:var(--teal);">apartado</span>${libre>0?`<span style="color:var(--good);">libre</span>`:""}</div>`:""}
   </div>`;
+
+  // ── Apartados: la casilla para "abonarle a X algo" ──
+  html+=`<div class="card">
+    <div class="row" style="margin-bottom:10px;">
+      <div class="ct" style="margin:0;">📌 Aparté para…</div>
+      <span style="font-size:12px;color:var(--gold);cursor:pointer;font-weight:600;" onclick="showAsigForm=${!showAsigForm};render()">${showAsigForm?"✕ cerrar":"＋ apartar"}</span>
+    </div>`;
+  if(showAsigForm){
+    const rk=rankDebts(d,(d.plan&&d.plan.strategy)||"avalanche");
+    const sug=[];
+    rk.slice(0,2).forEach(x=>sug.push({n:"Abono "+x.de.description,a:Math.min(Math.max(100000,Math.round(cp.free*0.3)),x.pending)}));
+    tercerosActive(d).filter(t=>t.kind!=="debt").forEach(()=>{});
+    html+=`<div style="background:var(--inset);border-radius:12px;padding:12px;margin-bottom:12px;">
+      <label class="fl">¿Para qué / para quién?</label>
+      <input type="text" placeholder="Ej: Abono a Luciana, Mercado, Regalo…" value="${(newAsig.name||"").replace(/"/g,"&quot;")}" oninput="newAsig.name=this.value"/>
+      <label class="fl">Monto</label>
+      <input type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(newAsig.amount)}" oninput="fmtAmountInput(this,v=>newAsig.amount=v)"/>
+      <button class="btn" style="margin:4px 0 0;padding:12px;font-size:14px;" onclick="doAddAsignacion()">✓ Apartar</button>
+      ${sug.length?`<div style="margin-top:10px;"><div class="fl">Sugerencias rápidas</div><div class="chips" style="margin:0;">
+        ${sug.map(s=>`<div class="chip" onclick="doQuickAsignacion('${s.n.replace(/'/g,"\\'")}',${s.a})">${s.n} · ${fmt(s.a)}</div>`).join("")}
+      </div></div>`:""}
+    </div>`;
+  }
+  if(asigs.length===0){
+    html+=`<div style="text-align:center;padding:14px 8px 8px;">
+      <div style="font-size:13px;color:var(--ink2);margin-bottom:4px;">Nada apartado todavía</div>
+      <div style="font-size:12px;color:var(--ink3);line-height:1.5;">Aparta plata para cosas concretas (un abono a alguien, el mercado, un regalo) y el número de arriba te dice qué te queda de verdad.</div>
+      <span style="font-size:11px;color:var(--gold);cursor:pointer;font-family:monospace;display:inline-block;margin-top:8px;" onclick="doCopiarAsignaciones()">⧉ copiar los del mes pasado</span>
+    </div>`;
+  }else{
+    asigs.forEach(a=>{
+      html+=`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);">
+        <span style="font-size:17px;cursor:pointer;line-height:1;" onclick="doToggleAsignacion(${a.id})" title="${a.done?"Ya lo hiciste":"Marcar como hecho"}">${a.done?"✅":"⬜"}</span>
+        <span style="flex:1;min-width:0;font-size:14px;${a.done?"text-decoration:line-through;color:var(--ink3);":""}">${a.name}</span>
+        <span style="font-size:14px;font-weight:700;font-family:monospace;color:${a.done?"var(--ink3)":"var(--teal)"};">${fmt(a.amount)}</span>
+        <span style="font-size:13px;cursor:pointer;color:var(--ink3);" onclick="doDeleteAsignacion(${a.id})">🗑️</span>
+      </div>`;
+    });
+    html+=`<div class="row" style="margin:10px 0 0;padding-top:8px;border-top:1px solid var(--line2);"><span style="font-size:13px;color:var(--ink2);font-weight:600;">Total apartado</span><span style="font-size:15px;font-weight:700;color:var(--teal);font-family:monospace;">${fmt(asignado)}</span></div>`;
+  }
+  html+=`</div>`;
   html+=`<div class="card-quiet"><div class="row" style="margin:0 0 6px;"><span style="font-size:12px;color:var(--ink2);">Compromiso (fijos ÷ ingreso)</span><span style="font-size:13px;font-weight:700;color:${ratioCol};font-family:monospace;">${ratio}%</span></div><div class="bar-wrap"><div class="bar" style="width:${Math.min(ratio,100)}%;background:${ratioCol};"></div></div><div style="font-size:10px;color:var(--ink3);font-family:monospace;margin-top:4px;">${ratio<30?"Saludable":ratio<=45?"Ajustado":"Alto — cuidado con nuevos gastos"}</div></div>`;
-  if(!alloc.deficit&&cp.free>0){
-    html+=`<div class="card"><div class="ct">Reparto sugerido del disponible</div>
-      ${allocRow("🛡️ Fondo de emergencia",alloc.fondoEmergencia,"var(--teal)")}
-      ${allocRow("🎯 Extra a "+(alloc.deudaObjetivo||"deuda"),alloc.extraDeuda,"var(--gold)")}
-      ${allocRow("💚 Ahorro / metas",alloc.ahorroMetas,"var(--good)")}
-      <button class="btn" style="margin-top:10px;" onclick="simExtra=${alloc.extraDeuda||500000};asesorTab='simular';render()">🧮 Simular ese abono a deuda →</button>
+  if(!alloc.deficit&&libre>0){
+    // El reparto se sugiere sobre lo que AÚN queda libre, no sobre el disponible bruto.
+    const feGap2=emergencyGap(d);
+    const sFE=Math.min(libre,Math.max(0,Math.min(feGap2,libre*0.2)));
+    const rest2=libre-sFE;
+    const cara=rankDebts(d,"avalanche").some(x=>x.hasRate&&x.mRate>0);
+    const wD=cara?0.7:0.3;
+    const sDeuda=Math.round(rest2*wD),sAhorro=Math.round(rest2*(1-wD));
+    html+=`<div class="card"><div class="ct">Qué hacer con lo que te queda libre (${fmt(libre)})</div>
+      ${allocRow("🛡️ Fondo de emergencia",Math.round(sFE),"var(--teal)")}
+      ${allocRow("🎯 Extra a "+(alloc.deudaObjetivo||"deuda"),sDeuda,"var(--gold)")}
+      ${allocRow("💚 Ahorro / metas",sAhorro,"var(--good)")}
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn" style="margin:0;flex:1;padding:11px;font-size:13px;" onclick="simExtra=${sDeuda||500000};asesorTab='simular';render()">🧮 Simular abono</button>
+        <button class="btn btn-dark" style="margin:0;flex:1;padding:11px;font-size:13px;" onclick="doQuickAsignacion('Abono a ${(alloc.deudaObjetivo||'deuda').replace(/'/g,"\\'")}',${sDeuda})">📌 Apartarlo</button>
+      </div>
     </div>`;
     html+=`<div class="card-quiet"><div class="row" style="margin:0 0 6px;"><span style="font-size:12px;color:var(--ink2);">🛡️ Fondo de emergencia (meta 3 meses)</span><span style="font-size:12px;font-family:monospace;color:var(--teal);">${fmt(feNow)} / ${fmt(feTarget)}</span></div><div class="bar-wrap"><div class="bar" style="width:${feTarget>0?Math.min(100,feNow/feTarget*100):0}%;background:var(--teal);"></div></div><div style="font-size:10px;color:var(--ink3);font-family:monospace;margin-top:4px;">Gasto base de vida: ${fmt(living)}/mes. Crea una meta llamada "Fondo de emergencia" para llevar el registro.</div></div>`;
   }else if(alloc.deficit){
