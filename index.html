@@ -486,6 +486,9 @@ function incomeForMonth(d,monthKey){
   return total;
 }
 // Corrección 5: escala admin/servicios/compartidas por la parte de John
+// autoPayroll=true (ej. libranza): el banco ya descontó la cuota directo de la nómina antes de
+// que el dinero llegue a la cuenta. Si el ingreso registrado es el NETO (ya sin libranza), contar
+// la cuota aquí otra vez duplicaría el descuento — por eso se excluye de las "obligaciones a pagar".
 function fixedOutflowsForMonth(d,monthKey){
   const sp=d.split||{A:50,B:50};let fixed=0;
   const recCats=new Set((d.recurring||[]).filter(r=>r.type==="debt"&&(r.debtMonths||0)>1).map(r=>r.category+"|"+r.description));
@@ -502,7 +505,7 @@ function fixedOutflowsForMonth(d,monthKey){
       fixed+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
     }
   });
-  (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring&&!e.closed).forEach(e=>{
+  (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring&&!e.closed&&!e.autoPayroll).forEach(e=>{
     const startKey=(e.debtStart||e.date||"").slice(0,7);if(!startKey)return;
     const el=moElapsed(startKey,monthKey);if(el<0||el>=e.debtMonths)return;
     if(recCats.has(e.category+"|"+(e.description||"")))return;
@@ -1268,6 +1271,7 @@ function renderDebtsCard(debts,d){
       </div>
       <div style="font-size:11px;color:var(--ink3);font-family:monospace;margin-bottom:8px;">${isClosed?`Capital original: ${fmtS(de.amount)}`:`Total: ${fmtS(de.amount)}${months>1?` · Cuota este mes ${fmtS(cuota)} · ${months} meses`:""}`}</div>
       ${isClosed&&de.closedNote?`<div style="font-size:11px;color:var(--ink2d);font-family:monospace;margin-bottom:8px;">🔄 ${de.closedNote}</div>`:""}
+      ${!isClosed&&de.autoPayroll?`<div style="font-size:11px;color:var(--teal);font-family:monospace;margin-bottom:8px;">🏦 Vía libranza — se descuenta solo de tu nómina, no cuenta como obligación aparte en tu plan</div>`:""}
       ${!isClosed&&hasRate?`<div style="font-size:10px;color:var(--gold);font-family:monospace;margin-bottom:8px;">${rateLabel(de)} · interés de este mes ≈ ${fmtS(Math.round(pending*mRate))}<br><span style="color:var(--ink3);">El saldo ya descuenta intereses corridos, por eso "Pagado + Falta" no suma el total.</span></div>`:""}
       ${isShared&&(paidA>0||paidB>0)?`<div style="display:flex;gap:8px;margin-bottom:8px;">
         <div style="flex:1;background:var(--inset);border-radius:8px;padding:6px 10px;border:1px solid color-mix(in srgb, var(--pa) 13%, transparent);"><div style="font-size:9px;color:var(--pa);font-family:monospace;text-transform:uppercase;">${d.names.A} ha puesto</div><div style="font-size:13px;font-weight:700;color:var(--pa);font-family:monospace;">${fmtS(paidA)}</div></div>
@@ -3135,7 +3139,7 @@ function buildProjection(d,n){
       }else income+=amt;
     });
     // Non-recurring debt entries with installments (no duplicate with recurring)
-    (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring&&!e.closed).forEach(e=>{
+    (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.isRecurring&&!e.closed&&!e.autoPayroll).forEach(e=>{
       const startKey=(e.debtStart||e.date||"").slice(0,7);
       if(!startKey)return;
       const elapsed=moElapsed(startKey,key);
