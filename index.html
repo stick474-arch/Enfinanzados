@@ -3251,7 +3251,7 @@ function monthFlow(d,mk){
   (d.recurring||[]).forEach(r=>{
     const ov=(r.overrides&&r.overrides[mk]!=null)?r.overrides[mk]:null;
     if(r.type==="income"){
-      incomes.push({id:r.id,name:r.description||r.category,user:r.user==="A"?"A":"B",amount:ovTotal(ov,r.amount),kind:"income",editable:true});
+      incomes.push({id:r.id,name:r.description||r.category,user:r.user==="A"?"A":"B",amount:ovTotal(ov,r.amount),kind:"income",editable:true,isGross:!!r.isGross,sub:r.isGross?"bruto · neto pendiente":""});
       return;
     }
     const isCuota=r.type==="debt"&&(r.debtMonths||0)>1;
@@ -3355,6 +3355,12 @@ function renderJuntos(){
   const bar=subTabBar([["mes","📅","Este mes"],["curva","📈","Curva"],["wishlist","🛋️",`Wishlist${pend?" ("+pend+")":""}`]],juntosTab,"juntosTab");
   return bar+(juntosTab==="curva"?renderJuntosCurva(d):juntosTab==="wishlist"?renderJuntosWish(d):renderJuntosMes(d));
 }
+// Aviso mientras algún ingreso siga en bruto: desaparece al corregir el monto.
+function grossWarning(f){
+  const g=f.incomes.filter(i=>i.isGross);
+  if(!g.length)return"";
+  return`<div class="card-quiet" style="border-color:color-mix(in srgb, var(--gold) 40%, transparent);font-size:12.5px;color:var(--ink2);line-height:1.55;">⚠️ ${g.map(i=>`<b style="color:var(--ink);">${escH(i.name)}</b> (${fmt(i.amount)})`).join(", ")} está en bruto. Lo que entra, lo que queda, la curva y el porcentaje de cuotas se ven mejor de lo real hasta poner el valor neto. Corrígelo con ✏️ editar en “Lo que entra”.</div>`;
+}
 function whoTag(d,u){
   const col=u==="A"?"var(--pa)":u==="B"?"var(--pb)":"var(--gold)";
   return`<span class="tag" style="background:color-mix(in srgb, ${col} 9%, transparent);color:${col};border:1px solid color-mix(in srgb, ${col} 24%, transparent);">${u==="shared"?"Compartido":escH(nm(u))}</span>`;
@@ -3455,7 +3461,7 @@ function renderJuntosMes(d){
     ${f.payroll.length?`<div class="j-sub" style="margin-top:14px;">Ya descontado de nómina · no suma de nuevo</div>${f.payroll.map(x=>jRow(d,{...x,sub:"libranza"},"")).join("")}`:""}
   </div>`;
   const note=`<div class="help-box">Aquí están solo los gastos fijos registrados. Para ver la foto completa faltan el mercado, el transporte y los gastos propios de ${escH(d.names.A)}: agrégalos con “＋ Agregar gasto mensual” y aparecerán también en la curva.</div>`;
-  return`<div class="sec">${hero}${note}<div class="grid-2"><div>${incomeCard}${perPerson}</div>${outCard}</div></div>`;
+  return`<div class="sec">${grossWarning(f)}${hero}${note}<div class="grid-2"><div>${incomeCard}${perPerson}</div>${outCard}</div></div>`;
 }
 function setRecUser(u){
   const d=D();recForm.user=u;
@@ -3487,7 +3493,7 @@ async function doSaveRec(){
   const d=D();
   const data={description:f.description.trim(),amount:amt,user:f.user,category:f.category};
   const recurring=f.id
-    ?(d.recurring||[]).map(r=>r.id===f.id?{...r,...data}:r)
+    ?(d.recurring||[]).map(r=>r.id===f.id?{...r,...data,isGross:r.amount===amt&&!!r.isGross}:r)
     :[...(d.recurring||[]),{id:Date.now(),type:f.type,...data,date:today(),isRecurring:true,registeredBy:"B"}];
   recForm=null;
   await persist({...d,recurring});
@@ -3695,6 +3701,7 @@ function renderJuntosCurva(d){
     <tbody>${rows.map((r,i)=>`<tr><th>${moLabel(r.key)}</th><td>${fmt(r.in)}</td><td>${fmt(r.out)}</td><td style="${r.net<0?"color:var(--bad);":""}">${fmt(r.net)}</td><td style="font-weight:650;${r.saldo<0?"color:var(--bad);":""}">${fmt(r.saldo)}</td>${withWish?`<td>${fmt(wishSaldos[i])}</td>`:""}</tr>`).join("")}</tbody>
   </table></div>`:"";
   return`<div class="sec">
+    ${grossWarning(rows[0].flow)}
     <div class="card card-gold">
       <div class="ct">Músculo financiero</div>
       <label class="fl">¿Con cuánto arrancaron este mes? (cuentas + ahorros de los dos)</label>
