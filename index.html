@@ -206,6 +206,7 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--gold);margin:0;}
       <div style="display:flex;align-items:center;gap:6px;">
         <button class="icon-btn" title="Deshacer última acción" onclick="doUndo()">↶</button>
         <button class="icon-btn" title="Cambiar tema claro/oscuro" onclick="toggleTheme()" id="theme-btn">🌙</button>
+        <button class="icon-btn" title="Cerrar sesión" aria-label="Cerrar sesión" onclick="doLogout()" id="logout-btn" style="display:none;">🚪</button>
         <button class="icon-btn" title="Exportar informe completo" onclick="doExportReport()">📤</button>
         <span style="display:flex;align-items:center;margin-left:4px;"><span class="dot" id="fb-dot" style="background:var(--bad);"></span><span id="fb-lbl" style="font-size:10px;color:var(--ink3);font-family:var(--num);">conectando…</span></span>
       </div>
@@ -223,9 +224,16 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--gold);margin:0;}
 // ── Firebase Realtime Database REST (no API key needed in test mode) ─────────
 const RTDB_URL = "https://finanzas-9e3db-default-rtdb.firebaseio.com/finanzas.json";
 
+// Web API Key del proyecto (identifica el proyecto, no es una contraseña). Vacía = sin inicio de sesión.
+const FB_API_KEY = "";
+
 let localData = null;
 let saving = false;
 let fbOnline = false;
+let authSession = null; // {idToken,refreshToken,expiresAt,email}
+let loginError = "";
+let loginBusy = false;
+let pollTimer = null;
 
 function emptyState(){
   return{entries:[],balances:{A:0,B:0},settled:[],names:{A:"Marce",B:"John"},
@@ -236,10 +244,93 @@ function emptyState(){
     plan:{strategy:"avalanche",extraSim:500000,allocAhorro:0,allocDeuda:0}};
 }
 
+const authEnabled=()=>!!FB_API_KEY;
+function storeSession(){
+  try{
+    if(authSession)localStorage.setItem("auth_session",JSON.stringify({refreshToken:authSession.refreshToken,email:authSession.email}));
+    else localStorage.removeItem("auth_session");
+  }catch(e){}
+}
+// false solo si Firebase rechazó la sesión. Sin internet se conserva para ver los datos guardados.
+async function refreshSession(){
+  if(!authSession||!authSession.refreshToken)return false;
+  try{
+    const r=await fetch("https://securetoken.googleapis.com/v1/token?key="+FB_API_KEY,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"grant_type=refresh_token&refresh_token="+encodeURIComponent(authSession.refreshToken)});
+    if(!r.ok)return false;
+    const j=await r.json();
+    authSession={...authSession,idToken:j.id_token,refreshToken:j.refresh_token,expiresAt:Date.now()+Number(j.expires_in)*1000};
+    storeSession();
+    return true;
+  }catch(e){return true;}
+}
+function sessionExpired(){
+  authSession=null;storeSession();localData=null;undoStack=[];
+  try{localStorage.removeItem("finanzas_cache");}catch(e){}
+  if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
+  loginError="Tu sesión terminó. Vuelve a entrar.";
+  render();
+}
+// Toda lectura y escritura pasa por aquí: agrega el token y lo renueva si venció.
+async function rtdbFetch(opts){
+  if(!authEnabled())return fetch(RTDB_URL,opts);
+  if(!authSession){render();return null;}
+  if(!authSession.idToken||Date.now()>authSession.expiresAt-60000){if(!await refreshSession()){sessionExpired();return null;}}
+  const go=()=>fetch(RTDB_URL+"?auth="+encodeURIComponent(authSession.idToken||""),opts);
+  let r=await go();
+  if(r.status===401){
+    if(!await refreshSession()){sessionExpired();return null;}
+    r=await go();
+    if(r.status===401){sessionExpired();return null;}
+  }
+  return r;
+}
+async function doLogin(){
+  const email=(document.getElementById("login-email")||{}).value||"";
+  const password=(document.getElementById("login-pass")||{}).value||"";
+  if(!email.trim()||!password){loginError="Escribe tu correo y contraseña.";render();return;}
+  loginBusy=true;loginError="";render();
+  try{
+    const r=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key="+FB_API_KEY,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email.trim(),password,returnSecureToken:true})});
+    const j=await r.json();
+    if(!r.ok){
+      const code=(j.error&&j.error.message)||"";
+      loginError=code.startsWith("TOO_MANY_ATTEMPTS")?"Demasiados intentos. Espera unos minutos.":code.startsWith("USER_DISABLED")?"Esta cuenta está deshabilitada.":"Correo o contraseña incorrectos.";
+      loginBusy=false;render();return;
+    }
+    authSession={idToken:j.idToken,refreshToken:j.refreshToken,expiresAt:Date.now()+Number(j.expiresIn)*1000,email:j.email};
+    storeSession();loginBusy=false;loginError="";
+    startApp();
+  }catch(e){loginBusy=false;loginError="No hay conexión. Intenta de nuevo.";render();}
+}
+function doLogout(){
+  authSession=null;storeSession();
+  try{localStorage.removeItem("finanzas_cache");}catch(e){}
+  location.reload();
+}
+function renderLogin(){
+  document.getElementById("hdr-title").textContent="💑 Finanzas en Pareja";
+  document.getElementById("hdr-sub").textContent="Acceso privado";
+  document.getElementById("nav").innerHTML="";
+  const lo=document.getElementById("logout-btn");if(lo)lo.style.display="none";
+  const c=document.getElementById("content");c.className="";
+  c.innerHTML=`<div class="sec" style="max-width:420px;margin:0 auto;">
+    <form class="card" onsubmit="event.preventDefault();doLogin()">
+      <div style="font-size:18px;font-weight:700;margin-bottom:4px;">Entrar</div>
+      <div style="font-size:13px;color:var(--ink2);margin-bottom:14px;">Usa tu cuenta de la app para ver sus finanzas.</div>
+      <label class="fl" for="login-email">Correo</label>
+      <input id="login-email" type="email" autocomplete="username" inputmode="email"/>
+      <label class="fl" for="login-pass">Contraseña</label>
+      <input id="login-pass" type="password" autocomplete="current-password"/>
+      ${loginError?`<div role="alert" style="font-size:13px;color:var(--bad);margin-bottom:10px;">⚠️ ${escH(loginError)}</div>`:""}
+      <button class="btn" type="submit" style="margin:0;" ${loginBusy?"disabled":""}>${loginBusy?"Entrando…":"Entrar"}</button>
+    </form>
+  </div>`;
+}
+
 async function loadFromFirebase(){
   try{
-    const r=await fetch(RTDB_URL);
-    if(!r.ok)return null;
+    const r=await rtdbFetch();
+    if(!r||!r.ok)return null;
     const data=await r.json();
     return data;
   }catch(e){return null;}
@@ -247,8 +338,8 @@ async function loadFromFirebase(){
 
 async function saveToFirebase(data){
   try{
-    const r=await fetch(RTDB_URL,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
-    return r.ok;
+    const r=await rtdbFetch({method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+    return !!(r&&r.ok);
   }catch(e){return false;}
 }
 
@@ -424,6 +515,7 @@ let juntosOffset=0; // meses hacia adelante en "Este mes"
 let juntosHorizon=12;
 let juntosShowTable=false;
 let juntosWithWish=false;
+let aporteEdit=null; // {A,B} mientras se edita el aporte a la casa
 let recForm=null;  // {id,type,description,amount,user,category}
 let wishForm=null; // {id,name,kind,price,note}
 let showBoughtWish=false;
@@ -457,6 +549,8 @@ function resetForm(){
 
 // ── Render ─────────────────────────────────────────────────────────────────
 function render(){
+  if(authEnabled()&&!authSession){renderLogin();return;}
+  const lo=document.getElementById("logout-btn");if(lo)lo.style.display=authEnabled()?"inline-flex":"none";
   const d=D();
   document.getElementById("hdr-title").textContent=`💑 ${d.names.A} & ${d.names.B}`;
   document.getElementById("hdr-sub").textContent=`División ${d.split.A}/${d.split.B}`;
@@ -569,6 +663,8 @@ function incomeForMonth(d,monthKey){
 // la cuota aquí otra vez duplicaría el descuento — por eso se excluye de las "obligaciones a pagar".
 function fixedOutflowsForMonth(d,monthKey){
   const sp=d.split||{A:50,B:50};let fixed=0;
+  const casa=casaReal(d,monthKey);
+  if(casa)fixed+=casa.B;
   const recCats=new Set((d.recurring||[]).filter(r=>r.type==="debt"&&(r.debtMonths||0)>1).map(r=>r.category+"|"+r.description));
   (d.recurring||[]).forEach(r=>{
     if(r.type==="income")return;
@@ -577,6 +673,7 @@ function fixedOutflowsForMonth(d,monthKey){
       if(el<0||el>=r.debtMonths)return;
       const monthly=Math.round(r.amount/r.debtMonths);
       const amt=ovTotal(r.overrides&&r.overrides[monthKey],monthly);
+      if(r.user==="shared"&&casa)return; // lo real se suma una sola vez abajo
       fixed+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
     }else if(r.type==="expense"){
       const amt=ovTotal(r.overrides&&r.overrides[monthKey],r.amount);
@@ -591,6 +688,22 @@ function fixedOutflowsForMonth(d,monthKey){
     fixed+=e.user==="shared"?monthly*(sp.B/100):(e.user==="B"?monthly:0);
   });
   return Math.round(fixed);
+}
+// Lo que de verdad pone cada uno al mes para casa + parqueadero. Lo que pase de ahí en los meses
+// de cuota alta se cubre con primas, no con el salario. Después de "hasta" se vuelve a la división.
+function casaReal(d,mk){
+  const ap=(d.juntos||{}).aporteCasa;
+  if(!ap||(ap.hasta&&mk>ap.hasta))return null;
+  let total=0;
+  (d.recurring||[]).forEach(r=>{
+    if(r.type!=="debt"||r.user!=="shared"||(r.debtMonths||0)<=1)return;
+    const el=moElapsed((r.debtStart||mk).slice(0,7),mk);
+    if(el<0||el>=r.debtMonths)return;
+    total+=ovTotal(r.overrides&&r.overrides[mk],Math.round(r.amount/r.debtMonths));
+  });
+  const A=Number(ap.A)||0;
+  const B=Math.min(Number(ap.B)||0,Math.max(0,total-A));
+  return{A,B,total,extra:Math.max(0,total-A-B)};
 }
 function capitalPlan(d,monthKey){const income=incomeForMonth(d,monthKey);const fixed=fixedOutflowsForMonth(d,monthKey);return{income,fixed,free:income-fixed};}
 // ── Asignaciones: plata que apartas del disponible para destinos concretos ───
@@ -754,7 +867,7 @@ function advisorInsights(d){
     out.push({sev:"ok",icon:"💰",title:"Te deben "+fmt(porCobrar),
       body:(intMes>0?"Te entran "+fmt(intMes)+"/mes en intereses. ":"")+
         (conFecha?"El capital vuelve el "+conFecha.dueDate+". ":"")+
-        (topDeuda?"Cuando entre, abonarlo a "+topDeuda.de.description+" reduce fuerte tus intereses.":""),
+        (((d.juntos||{}).pagosPlaneados||[]).length?"Cuando entre, va para "+d.juntos.pagosPlaneados[0].name+".":topDeuda?"Cuando entre, abonarlo a "+topDeuda.de.description+" reduce fuerte tus intereses.":""),
       cta:{tab:"deudas",deudasTab:"porcobrar",label:"Ver por cobrar →"}});
   }
   const order={bad:0,warn:1,info:2,ok:3};
@@ -1771,6 +1884,7 @@ function renderAsesorPlan(d){
       <div class="big" style="color:${libreCol};">${fmt(libre)}</div>
       <div style="font-size:11px;color:var(--ink3);margin-top:3px;">${libre>0?"Puedes gastar esto sin romper tu plan":libre===0?"Justo en el límite":"Reduce algún apartado o gasto"}</div>
     </div>
+    ${casaReal(d,mk)?`<div style="font-size:11.5px;color:var(--ink2d);line-height:1.5;margin-top:8px;">🏠 Usa tu aporte real de ${fmt(casaReal(d,mk).B)} a casa y parqueadero.${casaReal(d,mk).extra>0?` Los ${fmt(casaReal(d,mk).extra)} extra de este mes van con primas.`:""}</div>`:""}
     ${asignado>0?`<div class="bar-wrap" style="height:8px;display:flex;gap:2px;background:none;">
       <div style="flex:${Math.max(1,cp.fixed)};background:var(--bad);border-radius:6px;"></div>
       <div style="flex:${Math.max(1,asignado)};background:var(--teal);border-radius:6px;"></div>
@@ -3279,6 +3393,12 @@ function monthFlow(d,mk){
     const a=e.user==="shared"?Math.round(monthly*sp.A/100):(e.user==="A"?monthly:0);
     outs.push({id:e.id,name:e.description,user:e.user,amount:monthly,kind:"cuota",editable:false,a,b:monthly-a});
   });
+  ((d.juntos||{}).pagosPlaneados||[]).filter(p=>p.month===mk).forEach(p=>{
+    const de=(d.entries||[]).find(e=>e.id===p.debtId);
+    if(de&&paymentsForDebt(d,de).some(x=>(x.date||"").startsWith(mk)))return;
+    const amt=de?Math.min(p.amount,pendingOf(d,de)):p.amount;
+    if(amt>0)outs.push({id:p.id,name:p.name,user:p.user,amount:amt,kind:"plan",editable:false,a:p.user==="A"?amt:0,b:p.user==="B"?amt:0});
+  });
   tercerosActive(d).filter(t=>t.kind!=="debt").forEach(t=>{
     const pend=terceroPending(t);if(pend<=0)return;
     const dueKey=t.dueDate?t.dueDate.slice(0,7):null;
@@ -3290,11 +3410,14 @@ function monthFlow(d,mk){
   });
   const sum=(l,f)=>l.reduce((s,x)=>s+(f?f(x):x.amount),0);
   const inRec=sum(incomes),inOne=sum(oneoffs),inTot=inRec+inOne;
-  const outTot=sum(outs),cuotas=sum(outs.filter(x=>x.kind==="cuota")),fijos=outTot-cuotas;
+  const outTot=sum(outs),cuotas=sum(outs.filter(x=>x.kind==="cuota")),planeado=sum(outs.filter(x=>x.kind==="plan")),fijos=outTot-cuotas-planeado;
   const inA=sum(incomes.filter(x=>x.user==="A")),inB=inRec-inA+inOne;
   const own=u=>sum(outs.filter(x=>x.user===u));
-  const shA=sum(outs.filter(x=>x.user==="shared"),x=>x.a),shB=sum(outs.filter(x=>x.user==="shared"),x=>x.b);
-  return{key:mk,incomes,outs,payroll,oneoffs,inRec,inTot,outTot,cuotas,fijos,net:inTot-outTot,inA,inB,ownA:own("A"),ownB:own("B"),shA,shB,
+  const casa=casaReal(d,mk);
+  const shOuts=outs.filter(x=>x.user==="shared"&&(!casa||x.kind!=="cuota"));
+  const shA=sum(shOuts,x=>x.a)+(casa?casa.A:0),shB=sum(shOuts,x=>x.b)+(casa?casa.B:0);
+  const extraPrimas=casa?casa.extra:0;
+  return{key:mk,incomes,outs,payroll,oneoffs,inRec,inTot,outTot,cuotas,fijos,planeado,net:inTot-outTot,inA,inB,ownA:own("A"),ownB:own("B"),shA,shB,extraPrimas,casaReal:!!casa,
     restA:inA-own("A")-shA,restB:inB-own("B")-shB,payrollTot:sum(payroll)};
 }
 function jointCurve(d,n){
@@ -3347,6 +3470,7 @@ function curveEvents(d,rows){
     if(inRange(last)>=0)ev.push({key:last,text:`Última libranza · ${e.description}: la nómina sube ${fmt(minPaymentOf(d,e))}`});
   });
   rows.forEach(r=>r.flow.oneoffs.forEach(o=>ev.push({key:r.key,text:`Entra ${o.name}: ${fmt(o.amount)}`})));
+  rows.forEach(r=>r.flow.outs.filter(o=>o.kind==="plan").forEach(o=>ev.push({key:r.key,text:`Sale ${o.name}: ${fmt(o.amount)}`})));
   const fin=(d.juntos||{}).financiacion;
   if(fin&&inRange(fin.date.slice(0,7))>=0)ev.push({key:fin.date.slice(0,7),text:`Vence la financiación del apartamento: ${fmt(fin.amount)}. Se cubre con el crédito; su cuota aún no está en la curva`});
   return ev.sort((a,b)=>a.key.localeCompare(b.key));
@@ -3422,13 +3546,14 @@ function renderJuntosMes(d){
       <div class="j-tile"><div class="k">Sale</div><div class="v">${fmt(f.outTot)}</div></div>
       <div class="j-tile"><div class="k">Queda</div><div class="v" style="color:${f.net>=0?"var(--good)":"var(--bad)"};">${fmt(f.net)}</div></div>
     </div>
-    <div class="j-stack" role="img" aria-label="Cuotas ${fmt(f.cuotas)}, gastos fijos ${fmt(f.fijos)}, queda ${fmt(queda)}">${seg(f.cuotas,"var(--ch-out)")}${seg(f.fijos,"var(--ch-3)")}${seg(queda,"var(--ch-in)")}</div>
+    <div class="j-stack" role="img" aria-label="Cuotas ${fmt(f.cuotas)}, gastos fijos ${fmt(f.fijos)}, pagos puntuales ${fmt(f.planeado)}, queda ${fmt(queda)}">${seg(f.cuotas,"var(--ch-out)")}${seg(f.fijos,"var(--ch-3)")}${seg(f.planeado,"var(--ink3)")}${seg(queda,"var(--ch-in)")}</div>
     ${key("var(--ch-out)","Cuotas de deudas",f.cuotas)}
     ${key("var(--ch-3)","Gastos fijos",f.fijos)}
+    ${f.planeado>0?key("var(--ink3)","Pagos puntuales",f.planeado):""}
     ${f.net>=0?key("var(--ch-in)","Queda libre",queda):`<div class="j-key" style="color:var(--bad);">⚠️ <span style="flex:1;">Faltan este mes</span><b style="font-family:var(--num);">${fmt(-f.net)}</b></div>`}
     ${isNow?`<div class="div"></div><div class="row" style="margin:0;font-size:12px;color:var(--ink2);"><span>Ya registrado en movimientos (${regE.length})</span><b style="font-family:var(--num);">${fmt(regTotal)}</b></div>`:""}
   </div>`;
-  const sharedTot=f.shA+f.shB;
+  const sharedTot=f.shA+f.shB+f.extraPrimas;
   const pctA=f.inRec>0?f.inA/f.inRec:0;
   const totalIncome=f.inA+f.inB;
   const cell=(v,bold,col)=>`<td style="${bold?"font-weight:700;":""}${col?`color:${col};`:""}">${fmt(v)}</td>`;
@@ -3439,11 +3564,13 @@ function renderJuntosMes(d){
       <tbody>
         <tr><th>Entra</th>${cell(f.inA)}${cell(f.inB)}${cell(totalIncome)}</tr>
         <tr><th>Gastos propios</th>${cell(f.ownA)}${cell(f.ownB)}${cell(f.ownA+f.ownB)}</tr>
-        <tr><th>Compartidos</th>${cell(f.shA)}${cell(f.shB)}${cell(sharedTot)}</tr>
+        <tr><th>Compartidos</th>${cell(f.shA)}${cell(f.shB)}${cell(f.shA+f.shB)}</tr>
+        ${f.extraPrimas>0?`<tr><th>Cuota alta, con primas</th><td>—</td><td>—</td>${cell(f.extraPrimas)}</tr>`:""}
         <tr class="tot"><th>Le queda</th>${cell(f.restA,true,f.restA<0?"var(--bad)":"")}${cell(f.restB,true,f.restB<0?"var(--bad)":"")}${cell(f.net,true,f.net<0?"var(--bad)":"")}</tr>
       </tbody>
     </table></div>
-    <div style="font-size:11.5px;color:var(--ink2d);line-height:1.55;margin-top:10px;">Compartidos según la división ${d.split.A}/${d.split.B} y los ajustes por cuota. ${f.inRec>0?`De los ingresos, ${escH(d.names.A)} aporta ${(pctA*100).toFixed(1)}% y ${escH(d.names.B)} ${((1-pctA)*100).toFixed(1)}%: si repartieran lo compartido en esa proporción, serían ${fmt(sharedTot*pctA)} y ${fmt(sharedTot*(1-pctA))}.`:""}</div>
+    <div style="font-size:11.5px;color:var(--ink2d);line-height:1.55;margin-top:10px;">${f.casaReal?`En casa y parqueadero se usa lo que de verdad pone cada uno${f.extraPrimas>0?`, y los ${fmt(f.extraPrimas)} extra de este mes van con primas`:""}. El arriendo va ${d.split.A}/${d.split.B}.`:`Compartidos según la división ${d.split.A}/${d.split.B} y los ajustes por cuota.`} ${f.inRec>0?`De los ingresos, ${escH(d.names.A)} aporta ${(pctA*100).toFixed(1)}% y ${escH(d.names.B)} ${((1-pctA)*100).toFixed(1)}%: si repartieran lo compartido en esa proporción, serían ${fmt(sharedTot*pctA)} y ${fmt(sharedTot*(1-pctA))}.`:""}</div>
+    ${renderAporteEditor(d)}
   </div>`;
   const showForm=t=>recForm&&recForm.type===t?renderRecForm(d):"";
   const addBtn=(t,l)=>recForm&&recForm.type===t?"":`<button class="btn btn-dark" style="margin:10px 0 0;padding:10px;font-size:13px;" onclick="doNewRec('${t}')">＋ ${l}</button>`;
@@ -3462,10 +3589,35 @@ function renderJuntosMes(d){
     ${showForm("expense")}${addBtn("expense","Agregar gasto mensual")}
     <div class="j-sub" style="margin-top:14px;">Cuotas de deudas · ${fmt(f.cuotas)}</div>
     ${cuotas.map(x=>jRow(d,x,`<span class="j-act" onclick="tab='deudas';deudasTab='mias';render()">ver en Deudas →</span>`)).join("")||`<div style="font-size:12px;color:var(--ink3);padding:6px 0;">Sin cuotas este mes.</div>`}
+    ${f.planeado>0?`<div class="j-sub" style="margin-top:14px;">Pagos puntuales · ${fmt(f.planeado)}</div>${f.outs.filter(x=>x.kind==="plan").map(x=>jRow(d,{...x,sub:"solo este mes"},"")).join("")}`:""}
     ${f.payroll.length?`<div class="j-sub" style="margin-top:14px;">Ya descontado de nómina · no suma de nuevo</div>${f.payroll.map(x=>jRow(d,{...x,sub:"libranza"},"")).join("")}`:""}
   </div>`;
   const note=`<div class="help-box">Aquí están solo los gastos fijos registrados. Para ver la foto completa faltan el mercado, el transporte y los gastos propios de ${escH(d.names.A)}: agrégalos con “＋ Agregar gasto mensual” y aparecerán también en la curva.</div>`;
   return`<div class="sec">${grossWarning(f)}${hero}${note}<div class="grid-2"><div>${incomeCard}${perPerson}</div>${outCard}</div></div>`;
+}
+function renderAporteEditor(d){
+  const ap=(d.juntos||{}).aporteCasa;
+  if(!ap)return"";
+  if(!aporteEdit)return`<span class="j-act" style="display:inline-block;margin-top:8px;color:var(--teal);" onclick="aporteEdit={A:'${Number(ap.A)||0}',B:'${Number(ap.B)||0}'};render()">✏️ Cambiar lo que pone cada uno</span>`;
+  return`<div class="j-form">
+    <div class="ct" style="margin-bottom:8px;">Aporte mensual a casa y parqueadero</div>
+    <div style="display:flex;gap:8px;">
+      <div style="flex:1;min-width:0;"><label class="fl">${escH(d.names.A)}</label><input type="text" inputmode="numeric" value="${fmtInit(aporteEdit.A)}" oninput="fmtAmountInput(this,v=>aporteEdit.A=v)"/></div>
+      <div style="flex:1;min-width:0;"><label class="fl">${escH(d.names.B)}</label><input type="text" inputmode="numeric" value="${fmtInit(aporteEdit.B)}" oninput="fmtAmountInput(this,v=>aporteEdit.B=v)"/></div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" style="margin:0;flex:1;padding:10px;" onclick="doSaveAporte()" ${saving?"disabled":""}>💾 Guardar</button>
+      <button class="btn btn-dark" style="margin:0;width:46px;padding:10px;" onclick="aporteEdit=null;render()">✕</button>
+    </div>
+  </div>`;
+}
+async function doSaveAporte(){
+  const A=Number(aporteEdit.A)||0,B=Number(aporteEdit.B)||0;
+  if(A+B<=0){showToast("⚠️ Ingresa un monto válido");return;}
+  const d=D();
+  aporteEdit=null;
+  await persist({...d,juntos:{...(d.juntos||{}),aporteCasa:{...(d.juntos||{}).aporteCasa,A,B}}});
+  showToast("✓ Aporte actualizado");
 }
 function setRecUser(u){
   const d=D();recForm.user=u;
@@ -3736,7 +3888,7 @@ function renderJuntosCurva(d){
         <div class="ct">Qué no incluye la curva</div>
         <div style="font-size:12.5px;color:var(--ink2);line-height:1.65;">
           • Gastos que aún no han agregado, como mercado y gastos de ${escH(d.names.A)}. Por eso hoy se ve más alta de lo real.<br>
-          • Primas y cesantías.<br>
+          • Primas y cesantías. Sí están restadas las cuotas altas que piensan pagar con ellas.<br>
           • ${(d.juntos||{}).financiacion?`El crédito del apartamento: al terminar la cuota inicial quedan ${fmt(d.juntos.financiacion.amount)} por financiar, con vencimiento ${d.juntos.financiacion.date}. La cuota debe caber en el margen de oct 2027 que aparece aquí; cuando la sepan, agréguenla como gasto mensual.`:"El crédito del apartamento: cuando sepan la cuota, agréguenla como gasto mensual."}
         </div>
       </div>
@@ -4247,6 +4399,19 @@ async function doClearOverride(recId,monthKey){
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 async function boot(){
+  if(authEnabled()){
+    let stored=null;
+    try{stored=JSON.parse(localStorage.getItem("auth_session")||"null");}catch(e){}
+    if(!stored||!stored.refreshToken){
+      try{localStorage.removeItem("finanzas_cache");}catch(e){}
+      render();return;
+    }
+    authSession={idToken:null,expiresAt:0,refreshToken:stored.refreshToken,email:stored.email};
+    if(!await refreshSession()){sessionExpired();return;}
+  }
+  startApp();
+}
+async function startApp(){
   // Load from localStorage as instant fallback
   const cached=localStorage.getItem("finanzas_cache");
   if(cached){try{localData=migrate(JSON.parse(cached));}catch(e){}}
@@ -4265,7 +4430,8 @@ async function boot(){
   updateSavingUI(false);
 
   // Poll Firebase every 30s for real-time sync
-  setInterval(async()=>{
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(async()=>{
     const r=await loadFromFirebase();
     if(r){fbOnline=true;localData=migrate(r);localStorage.setItem("finanzas_cache",JSON.stringify(localData));const ae=document.activeElement;const typing=ae&&/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);if(tab!=="agregar"&&!typing)render();updateSavingUI(false);}
   },30000);
