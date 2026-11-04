@@ -1131,8 +1131,10 @@ function renderThisMonthCard(d){
   const tS=me.filter(e=>e.type==="expense"&&e.user==="shared").reduce((s,e)=>s+e.amount,0);
   const tA=me.filter(e=>e.type==="expense"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
   const tB=me.filter(e=>e.type==="expense"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
-  const iA=me.filter(e=>e.type==="income"&&e.user==="A").reduce((s,e)=>s+e.amount,0);
-  const iB=me.filter(e=>e.type==="income"&&e.user==="B").reduce((s,e)=>s+e.amount,0);
+  // Sin ingreso registrado en el mes se usa el recurrente: si no, "Disponible" sale negativo sin serlo.
+  const planMes=monthFlow(d,tm);
+  const iA=me.filter(e=>e.type==="income"&&e.user==="A").reduce((s,e)=>s+e.amount,0)||planMes.inA;
+  const iB=me.filter(e=>e.type==="income"&&e.user==="B").reduce((s,e)=>s+e.amount,0)||planMes.inB;
   const pTotal=pe.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
   const cTotal=tS+tA+tB;
   const deltaHtml=pTotal>0?(()=>{
