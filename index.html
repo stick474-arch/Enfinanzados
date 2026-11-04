@@ -3367,7 +3367,7 @@ function monthFlow(d,mk){
   (d.recurring||[]).forEach(r=>{
     const ov=(r.overrides&&r.overrides[mk]!=null)?r.overrides[mk]:null;
     if(r.type==="income"){
-      incomes.push({id:r.id,name:r.description||r.category,user:r.user==="A"?"A":"B",amount:ovTotal(ov,r.amount),kind:"income",editable:true,isGross:!!r.isGross,sub:r.isGross?"bruto · neto pendiente":""});
+      incomes.push({id:r.id,name:r.description||r.category,user:r.user==="A"?"A":"B",amount:ovTotal(ov,r.amount),kind:"income",editable:true,isGross:!!r.isGross,sub:r.isGross?"bruto · neto pendiente":r.isEstimated?"neto estimado":""});
       return;
     }
     const isCuota=r.type==="debt"&&(r.debtMonths||0)>1;
@@ -3408,16 +3408,18 @@ function monthFlow(d,mk){
     }
     if(dueKey===mk)oneoffs.push({id:"cap"+t.id,name:"Capital · "+t.name,user:"B",amount:pend});
   });
+  ((d.juntos||{}).primas||[]).filter(p=>(p.months||[]).includes(mk.slice(5))).forEach(p=>oneoffs.push({id:p.id,name:p.name,user:p.user,amount:p.amount}));
   const sum=(l,f)=>l.reduce((s,x)=>s+(f?f(x):x.amount),0);
   const inRec=sum(incomes),inOne=sum(oneoffs),inTot=inRec+inOne;
   const outTot=sum(outs),cuotas=sum(outs.filter(x=>x.kind==="cuota")),planeado=sum(outs.filter(x=>x.kind==="plan")),fijos=outTot-cuotas-planeado;
-  const inA=sum(incomes.filter(x=>x.user==="A")),inB=inRec-inA+inOne;
+  const recA=sum(incomes.filter(x=>x.user==="A"));
+  const inA=recA+sum(oneoffs.filter(x=>x.user==="A")),inB=inTot-inA;
   const own=u=>sum(outs.filter(x=>x.user===u));
   const casa=casaReal(d,mk);
   const shOuts=outs.filter(x=>x.user==="shared"&&(!casa||x.kind!=="cuota"));
   const shA=sum(shOuts,x=>x.a)+(casa?casa.A:0),shB=sum(shOuts,x=>x.b)+(casa?casa.B:0);
   const extraPrimas=casa?casa.extra:0;
-  return{key:mk,incomes,outs,payroll,oneoffs,inRec,inTot,outTot,cuotas,fijos,planeado,net:inTot-outTot,inA,inB,ownA:own("A"),ownB:own("B"),shA,shB,extraPrimas,casaReal:!!casa,
+  return{key:mk,incomes,outs,payroll,oneoffs,inRec,inTot,outTot,cuotas,fijos,planeado,net:inTot-outTot,recA,inA,inB,ownA:own("A"),ownB:own("B"),shA,shB,extraPrimas,casaReal:!!casa,
     restA:inA-own("A")-shA,restB:inB-own("B")-shB,payrollTot:sum(payroll)};
 }
 function jointCurve(d,n){
@@ -3554,7 +3556,7 @@ function renderJuntosMes(d){
     ${isNow?`<div class="div"></div><div class="row" style="margin:0;font-size:12px;color:var(--ink2);"><span>Ya registrado en movimientos (${regE.length})</span><b style="font-family:var(--num);">${fmt(regTotal)}</b></div>`:""}
   </div>`;
   const sharedTot=f.shA+f.shB+f.extraPrimas;
-  const pctA=f.inRec>0?f.inA/f.inRec:0;
+  const pctA=f.inRec>0?f.recA/f.inRec:0;
   const totalIncome=f.inA+f.inB;
   const cell=(v,bold,col)=>`<td style="${bold?"font-weight:700;":""}${col?`color:${col};`:""}">${fmt(v)}</td>`;
   const perPerson=`<div class="card">
@@ -3649,7 +3651,7 @@ async function doSaveRec(){
   const d=D();
   const data={description:f.description.trim(),amount:amt,user:f.user,category:f.category};
   const recurring=f.id
-    ?(d.recurring||[]).map(r=>r.id===f.id?{...r,...data,isGross:r.amount===amt&&!!r.isGross}:r)
+    ?(d.recurring||[]).map(r=>r.id===f.id?{...r,...data,isGross:r.amount===amt&&!!r.isGross,isEstimated:r.amount===amt&&!!r.isEstimated}:r)
     :[...(d.recurring||[]),{id:Date.now(),type:f.type,...data,date:today(),isRecurring:true,registeredBy:"B"}];
   recForm=null;
   await persist({...d,recurring});
@@ -3888,7 +3890,7 @@ function renderJuntosCurva(d){
         <div class="ct">Qué no incluye la curva</div>
         <div style="font-size:12.5px;color:var(--ink2);line-height:1.65;">
           • Gastos que aún no han agregado, como mercado y gastos de ${escH(d.names.A)}. Por eso hoy se ve más alta de lo real.<br>
-          • Primas y cesantías. Sí están restadas las cuotas altas que piensan pagar con ellas.<br>
+          • Cesantías. Las primas sí están, y la de ${escH(d.names.A)} es un estimado con su salario actual.<br>
           • ${(d.juntos||{}).financiacion?`El crédito del apartamento: al terminar la cuota inicial quedan ${fmt(d.juntos.financiacion.amount)} por financiar, con vencimiento ${d.juntos.financiacion.date}. La cuota debe caber en el margen de oct 2027 que aparece aquí; cuando la sepan, agréguenla como gasto mensual.`:"El crédito del apartamento: cuando sepan la cuota, agréguenla como gasto mensual."}
         </div>
       </div>
