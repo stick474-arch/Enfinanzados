@@ -3345,6 +3345,8 @@ function curveEvents(d,rows){
     if(inRange(last)>=0)ev.push({key:last,text:`Última libranza · ${e.description}: la nómina sube ${fmt(minPaymentOf(d,e))}`});
   });
   rows.forEach(r=>r.flow.oneoffs.forEach(o=>ev.push({key:r.key,text:`Entra ${o.name}: ${fmt(o.amount)}`})));
+  const fin=(d.juntos||{}).financiacion;
+  if(fin&&inRange(fin.date.slice(0,7))>=0)ev.push({key:fin.date.slice(0,7),text:`Vence la financiación del apartamento: ${fmt(fin.amount)}. Se cubre con el crédito; su cuota aún no está en la curva`});
   return ev.sort((a,b)=>a.key.localeCompare(b.key));
 }
 
@@ -3733,7 +3735,7 @@ function renderJuntosCurva(d){
         <div style="font-size:12.5px;color:var(--ink2);line-height:1.65;">
           • Gastos que aún no han agregado, como mercado y gastos de ${escH(d.names.A)}. Por eso hoy se ve más alta de lo real.<br>
           • Primas y cesantías.<br>
-          • El crédito del apartamento: las cuotas registradas son la cuota inicial y terminan en sep 2027. Cuando sepan la cuota del crédito, agréguenla como gasto mensual.
+          • ${(d.juntos||{}).financiacion?`El crédito del apartamento: al terminar la cuota inicial quedan ${fmt(d.juntos.financiacion.amount)} por financiar, con vencimiento ${d.juntos.financiacion.date}. La cuota debe caber en el margen de oct 2027 que aparece aquí; cuando la sepan, agréguenla como gasto mensual.`:"El crédito del apartamento: cuando sepan la cuota, agréguenla como gasto mensual."}
         </div>
       </div>
     </div>
