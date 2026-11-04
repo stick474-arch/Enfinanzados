@@ -703,7 +703,11 @@ function casaReal(d,mk){
   });
   const A=Number(ap.A)||0;
   const B=Math.min(Number(ap.B)||0,Math.max(0,total-A));
-  return{A,B,total,extra:Math.max(0,total-A-B)};
+  const extra=Math.max(0,total-A-B);
+  const ces=((d.juntos||{}).primas||[]).find(p=>p.only===mk&&p.fuente==="cesantias");
+  const spA=(d.split||{A:50,B:50}).A/100;
+  const extraA=ces?Math.max(0,extra-Number(ces.amount)):Math.round(extra*spA);
+  return{A,B,total,extra,extraA,extraB:extra-extraA,fuente:ces?"cesantías":"primas"};
 }
 function capitalPlan(d,monthKey){const income=incomeForMonth(d,monthKey);const fixed=fixedOutflowsForMonth(d,monthKey);return{income,fixed,free:income-fixed};}
 // ── Asignaciones: plata que apartas del disponible para destinos concretos ───
@@ -1884,7 +1888,7 @@ function renderAsesorPlan(d){
       <div class="big" style="color:${libreCol};">${fmt(libre)}</div>
       <div style="font-size:11px;color:var(--ink3);margin-top:3px;">${libre>0?"Puedes gastar esto sin romper tu plan":libre===0?"Justo en el límite":"Reduce algún apartado o gasto"}</div>
     </div>
-    ${casaReal(d,mk)?`<div style="font-size:11.5px;color:var(--ink2d);line-height:1.5;margin-top:8px;">🏠 Usa tu aporte real de ${fmt(casaReal(d,mk).B)} a casa y parqueadero.${casaReal(d,mk).extra>0?` Los ${fmt(casaReal(d,mk).extra)} extra de este mes van con primas.`:""}</div>`:""}
+    ${casaReal(d,mk)?`<div style="font-size:11.5px;color:var(--ink2d);line-height:1.5;margin-top:8px;">🏠 Usa tu aporte real de ${fmt(casaReal(d,mk).B)} a casa y parqueadero.${casaReal(d,mk).extra>0?` Los ${fmt(casaReal(d,mk).extra)} extra de este mes van con ${casaReal(d,mk).fuente}.`:""}</div>`:""}
     ${asignado>0?`<div class="bar-wrap" style="height:8px;display:flex;gap:2px;background:none;">
       <div style="flex:${Math.max(1,cp.fixed)};background:var(--bad);border-radius:6px;"></div>
       <div style="flex:${Math.max(1,asignado)};background:var(--teal);border-radius:6px;"></div>
@@ -3353,6 +3357,7 @@ function escH(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,
 function moAdd(key,n){const dt=new Date(parseInt(key.slice(0,4)),parseInt(key.slice(5))-1+n,1);return moKey(dt.getFullYear(),dt.getMonth()+1);}
 function moLabel(key){return MO_ES[parseInt(key.slice(5))-1]+" "+key.slice(0,4);}
 function moLargo(key){return MO_LARGO[parseInt(key.slice(5))-1]+" "+key.slice(0,4);}
+const WISH_GROUPS=["Temu"];
 const fmtAx=n=>{const a=Math.abs(n),s=n<0?"-":"";if(a>=1000000)return s+"$"+(+(a/1000000).toFixed(1))+"M";if(a>=1000)return s+"$"+Math.round(a/1000)+"K";return s+"$"+Math.round(a);};
 
 // Foto de un mes: lo que entra y lo que sale para los DOS, con las mismas reglas de buildProjection.
@@ -3367,7 +3372,7 @@ function monthFlow(d,mk){
   (d.recurring||[]).forEach(r=>{
     const ov=(r.overrides&&r.overrides[mk]!=null)?r.overrides[mk]:null;
     if(r.type==="income"){
-      incomes.push({id:r.id,name:r.description||r.category,user:r.user==="A"?"A":"B",amount:ovTotal(ov,r.amount),kind:"income",editable:true,isGross:!!r.isGross,sub:r.isGross?"bruto · neto pendiente":r.isEstimated?"neto estimado":""});
+      incomes.push({id:r.id,name:r.description||r.category,user:r.user==="A"?"A":"B",amount:ovTotal(ov,r.amount),kind:"income",editable:true,baseAmount:r.amount,isGross:!!r.isGross,sub:r.isGross?"bruto · neto pendiente":r.isEstimated?"neto estimado":""});
       return;
     }
     const isCuota=r.type==="debt"&&(r.debtMonths||0)>1;
@@ -3408,7 +3413,7 @@ function monthFlow(d,mk){
     }
     if(dueKey===mk)oneoffs.push({id:"cap"+t.id,name:"Capital · "+t.name,user:"B",amount:pend});
   });
-  ((d.juntos||{}).primas||[]).filter(p=>(p.months||[]).includes(mk.slice(5))).forEach(p=>oneoffs.push({id:p.id,name:p.name,user:p.user,amount:p.amount}));
+  ((d.juntos||{}).primas||[]).filter(p=>p.only?p.only===mk:(p.months||[]).includes(mk.slice(5))).forEach(p=>oneoffs.push({id:p.id,name:p.name,user:p.user,amount:(p.overrides&&p.overrides[mk]!=null)?p.overrides[mk]:p.amount}));
   const sum=(l,f)=>l.reduce((s,x)=>s+(f?f(x):x.amount),0);
   const inRec=sum(incomes),inOne=sum(oneoffs),inTot=inRec+inOne;
   const outTot=sum(outs),cuotas=sum(outs.filter(x=>x.kind==="cuota")),planeado=sum(outs.filter(x=>x.kind==="plan")),fijos=outTot-cuotas-planeado;
@@ -3418,9 +3423,9 @@ function monthFlow(d,mk){
   const casa=casaReal(d,mk);
   const shOuts=outs.filter(x=>x.user==="shared"&&(!casa||x.kind!=="cuota"));
   const shA=sum(shOuts,x=>x.a)+(casa?casa.A:0),shB=sum(shOuts,x=>x.b)+(casa?casa.B:0);
-  const extraPrimas=casa?casa.extra:0;
-  return{key:mk,incomes,outs,payroll,oneoffs,inRec,inTot,outTot,cuotas,fijos,planeado,net:inTot-outTot,recA,inA,inB,ownA:own("A"),ownB:own("B"),shA,shB,extraPrimas,casaReal:!!casa,
-    restA:inA-own("A")-shA,restB:inB-own("B")-shB,payrollTot:sum(payroll)};
+  const extraPrimas=casa?casa.extra:0,extraA=casa?casa.extraA:0,extraB=casa?casa.extraB:0,extraFuente=casa?casa.fuente:"";
+  return{key:mk,incomes,outs,payroll,oneoffs,inRec,inTot,outTot,cuotas,fijos,planeado,net:inTot-outTot,recA,inA,inB,ownA:own("A"),ownB:own("B"),shA,shB,extraPrimas,extraA,extraB,extraFuente,casaReal:!!casa,
+    restA:inA-own("A")-shA-extraA,restB:inB-own("B")-shB-extraB,payrollTot:sum(payroll)};
 }
 function jointCurve(d,n){
   let s=Number((d.juntos||{}).saldoInicial)||0;
@@ -3567,11 +3572,11 @@ function renderJuntosMes(d){
         <tr><th>Entra</th>${cell(f.inA)}${cell(f.inB)}${cell(totalIncome)}</tr>
         <tr><th>Gastos propios</th>${cell(f.ownA)}${cell(f.ownB)}${cell(f.ownA+f.ownB)}</tr>
         <tr><th>Compartidos</th>${cell(f.shA)}${cell(f.shB)}${cell(f.shA+f.shB)}</tr>
-        ${f.extraPrimas>0?`<tr><th>Cuota alta, con primas</th><td>—</td><td>—</td>${cell(f.extraPrimas)}</tr>`:""}
+        ${f.extraPrimas>0?`<tr><th>Cuota alta, con ${f.extraFuente}</th>${cell(f.extraA)}${cell(f.extraB)}${cell(f.extraPrimas)}</tr>`:""}
         <tr class="tot"><th>Le queda</th>${cell(f.restA,true,f.restA<0?"var(--bad)":"")}${cell(f.restB,true,f.restB<0?"var(--bad)":"")}${cell(f.net,true,f.net<0?"var(--bad)":"")}</tr>
       </tbody>
     </table></div>
-    <div style="font-size:11.5px;color:var(--ink2d);line-height:1.55;margin-top:10px;">${f.casaReal?`En casa y parqueadero se usa lo que de verdad pone cada uno${f.extraPrimas>0?`, y los ${fmt(f.extraPrimas)} extra de este mes van con primas`:""}. El arriendo va ${d.split.A}/${d.split.B}.`:`Compartidos según la división ${d.split.A}/${d.split.B} y los ajustes por cuota.`} ${f.inRec>0?`De los ingresos, ${escH(d.names.A)} aporta ${(pctA*100).toFixed(1)}% y ${escH(d.names.B)} ${((1-pctA)*100).toFixed(1)}%: si repartieran lo compartido en esa proporción, serían ${fmt(sharedTot*pctA)} y ${fmt(sharedTot*(1-pctA))}.`:""}</div>
+    <div style="font-size:11.5px;color:var(--ink2d);line-height:1.55;margin-top:10px;">${f.casaReal?`En casa y parqueadero se usa lo que de verdad pone cada uno${f.extraPrimas>0?`, y los ${fmt(f.extraPrimas)} extra de este mes van con ${f.extraFuente}`:""}. El arriendo va ${d.split.A}/${d.split.B}.`:`Compartidos según la división ${d.split.A}/${d.split.B} y los ajustes por cuota.`} ${f.inRec>0?`De los ingresos, ${escH(d.names.A)} aporta ${(pctA*100).toFixed(1)}% y ${escH(d.names.B)} ${((1-pctA)*100).toFixed(1)}%: si repartieran lo compartido en esa proporción, serían ${fmt(sharedTot*pctA)} y ${fmt(sharedTot*(1-pctA))}.`:""}</div>
     ${renderAporteEditor(d)}
   </div>`;
   const showForm=t=>recForm&&recForm.type===t?renderRecForm(d):"";
@@ -3805,7 +3810,8 @@ async function doSetSaldoInicial(v){
 function renderLeverage(d){
   const rows=jointCurve(d,36);
   const f=rows[0].flow;
-  const base=f.inRec+f.payrollTot;
+  const normalIn=x=>x.incomes.reduce((t,i)=>t+(i.baseAmount!=null?i.baseAmount:i.amount),0);
+  const base=normalIn(f)+f.payrollTot;
   const cuotas=f.cuotas+f.payrollTot;
   const pct=base>0?cuotas/base:0;
   const tope=Math.round(base*0.30);
@@ -3814,7 +3820,7 @@ function renderLeverage(d){
   const ends=curveEvents(d,rows).filter(e=>e.text.startsWith("Última")).map(e=>{
     const nx=rows.find(r=>r.key===moAdd(e.key,1));if(!nx)return"";
     const fx=nx.flow;
-    const m=Math.round((fx.inRec+fx.payrollTot)*0.30)-(fx.cuotas+fx.payrollTot);
+    const m=Math.round((normalIn(fx)+fx.payrollTot)*0.30)-(fx.cuotas+fx.payrollTot);
     return`<div class="j-key"><span style="flex:1;">${moLabel(nx.key)} · tras ${escH(e.text.replace(/^Última (cuota|libranza) · /,"").split(":")[0])}</span><b style="font-family:var(--num);">${fmt(m)}/mes</b></div>`;
   }).join("");
   const sinCuota=debtsOf(d).filter(de=>!de.closed&&(de.debtMonths||0)<=1&&pendingOf(d,de)>0.5);
@@ -3890,7 +3896,7 @@ function renderJuntosCurva(d){
         <div class="ct">Qué no incluye la curva</div>
         <div style="font-size:12.5px;color:var(--ink2);line-height:1.65;">
           • Gastos que aún no han agregado, como mercado y gastos de ${escH(d.names.A)}. Por eso hoy se ve más alta de lo real.<br>
-          • Cesantías. Las primas sí están, y la de ${escH(d.names.A)} es un estimado con su salario actual.<br>
+          • Cesantías, salvo las que ya tienen destino. Las primas sí están, y las de ${escH(d.names.A)} son un estimado con su salario actual.<br>
           • ${(d.juntos||{}).financiacion?`El crédito del apartamento: al terminar la cuota inicial quedan ${fmt(d.juntos.financiacion.amount)} por financiar, con vencimiento ${d.juntos.financiacion.date}. La cuota debe caber en el margen de oct 2027 que aparece aquí; cuando la sepan, agréguenla como gasto mensual.`:"El crédito del apartamento: cuando sepan la cuota, agréguenla como gasto mensual."}
         </div>
       </div>
@@ -3908,6 +3914,11 @@ function renderWishForm(){
     <div class="chips">
       <div class="chip${f.kind==="necesidad"?" on":""}" onclick="wishForm.kind='necesidad';render()">🧰 Necesidad</div>
       <div class="chip${f.kind==="deseo"?" on":""}" onclick="wishForm.kind='deseo';render()">✨ Deseo</div>
+    </div>
+    <label class="fl">Lista</label>
+    <div class="chips">
+      <div class="chip${!f.group?" on":""}" onclick="wishForm.group=null;render()">General</div>
+      ${WISH_GROUPS.map(g=>`<div class="chip${f.group===g?" on":""}" onclick="wishForm.group='${g}';render()">${g}</div>`).join("")}
     </div>
     <label class="fl">Precio aproximado (COP)</label>
     <input type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(f.price)}" oninput="fmtAmountInput(this,v=>wishForm.price=v)"/>
@@ -3940,10 +3951,11 @@ function renderJuntosWish(d){
   const pend=list.filter(w=>w.status!=="comprado");
   const bought=list.filter(w=>w.status==="comprado");
   const sum=l=>l.reduce((s,w)=>s+(Number(w.price)||0),0);
-  const needs=pend.filter(w=>w.kind==="necesidad"),wants=pend.filter(w=>w.kind!=="necesidad");
+  const needs=pend.filter(w=>!w.group&&w.kind==="necesidad"),wants=pend.filter(w=>!w.group&&w.kind!=="necesidad");
+  const sinPrecio=pend.filter(w=>!(Number(w.price)>0)).length;
   const plan=wishPlan(d);
   const total=sum(list),done=sum(bought);
-  const addBtn=wishForm?"":`<button class="btn" onclick="wishForm={id:null,name:'',kind:'necesidad',price:'',note:''};render()">＋ Agregar a la lista</button>`;
+  const addBtn=wishForm?"":`<button class="btn" onclick="wishForm={id:null,name:'',kind:'necesidad',price:'',note:'',group:null};render()">＋ Agregar a la lista</button>`;
   const section=(title,items)=>`<div class="card"><div class="row" style="margin-bottom:4px;"><div class="ct" style="margin:0;">${title}</div><b style="font-family:var(--num);font-size:14px;">${fmt(sum(items))}</b></div>
     ${items.length?items.map(w=>wishRow(w,plan.eta[w.id])).join(""):`<div style="font-size:12.5px;color:var(--ink3);padding:8px 0;">Nada por ahora.</div>`}</div>`;
   if(list.length===0)return`<div class="sec">${wishForm?renderWishForm():`<div class="card-quiet" style="text-align:center;padding:32px 16px;"><div style="font-size:38px;margin-bottom:10px;">🛋️</div><div style="font-size:14px;color:var(--ink2);margin-bottom:6px;">La lista del hogar está vacía</div><div style="font-size:12.5px;color:var(--ink3);margin-bottom:14px;">Agreguen lo que necesitan para la casa y lo que les gustaría tener. La app les dirá cuándo alcanza para cada cosa.</div>${addBtn}</div>`}</div>`;
@@ -3951,18 +3963,27 @@ function renderJuntosWish(d){
     <div class="card card-gold">
       <div class="ct">Lo que nos falta</div>
       <div class="big" style="font-size:26px;">${fmt(sum(pend))}</div>
-      <div class="j-tiles" style="margin:12px 0 0;grid-template-columns:repeat(2,minmax(0,1fr));">
+      ${sinPrecio?`<div style="font-size:12px;color:var(--ink2);margin-top:2px;">${sinPrecio} ${sinPrecio===1?"cosa aún no tiene precio y no suma":"cosas aún no tienen precio y no suman"}</div>`:""}
+      <div class="j-tiles" style="margin:12px 0 0;grid-template-columns:repeat(${2+WISH_GROUPS.length},minmax(0,1fr));">
         <div class="j-tile"><div class="k">Necesidades (${needs.length})</div><div class="v">${fmt(sum(needs))}</div></div>
         <div class="j-tile"><div class="k">Deseos (${wants.length})</div><div class="v">${fmt(sum(wants))}</div></div>
+        ${WISH_GROUPS.map(g=>{const it=pend.filter(w=>w.group===g);return`<div class="j-tile"><div class="k">${g} (${it.length})</div><div class="v">${fmt(sum(it))}</div></div>`;}).join("")}
       </div>
       ${total>0?`<div class="bar-wrap" style="margin-top:12px;"><div class="bar" style="width:${(done/total*100).toFixed(1)}%;background:var(--good);"></div></div><div style="font-size:11.5px;color:var(--ink2);">Ya compraron ${fmt(done)} de ${fmt(total)}</div>`:""}
     </div>
-    ${addBtn}${renderWishForm()}
+    ${addBtn}${wishForm&&!wishForm.group?renderWishForm():""}
     <div class="help-box">“Alcanza” sale de la curva: primero las necesidades y luego los deseos, en el orden en que los agregaron, sin bajar de un mes de gastos en la cuenta. La fecha mejora o empeora a medida que registren el saldo y sus gastos reales.</div>
     <div class="grid-2">
       ${section("🧰 Necesidades",needs)}
       ${section("✨ Deseos",wants)}
     </div>
+    ${WISH_GROUPS.map(g=>{
+      const it=pend.filter(w=>w.group===g);
+      return`<div class="card"><div class="row" style="margin-bottom:4px;"><div class="ct" style="margin:0;">🛒 Compras ${g}</div><b style="font-family:var(--num);font-size:14px;">${fmt(sum(it))}</b></div>
+        ${it.length?it.map(w=>wishRow(w,plan.eta[w.id])).join(""):`<div style="font-size:12.5px;color:var(--ink3);padding:8px 0;">Nada por ahora.</div>`}
+        ${wishForm&&wishForm.group===g?renderWishForm():wishForm?"":`<button class="btn btn-dark" style="margin:10px 0 0;padding:10px;font-size:13px;" onclick="wishForm={id:null,name:'',kind:'necesidad',price:'',note:'',group:'${g}'};render()">＋ Agregar a ${g}</button>`}
+      </div>`;
+    }).join("")}
     ${bought.length?`<div class="card"><div class="row" style="margin:0;cursor:pointer;" onclick="showBoughtWish=!showBoughtWish;render()"><div class="ct" style="margin:0;">✅ Ya comprado (${bought.length}) ${showBoughtWish?"▲":"▾"}</div><b style="font-family:var(--num);font-size:14px;">${fmt(done)}</b></div>${showBoughtWish?`<div style="margin-top:6px;">${bought.map(w=>wishRow(w)).join("")}</div>`:""}</div>`:""}
   </div>`;
 }
@@ -3970,7 +3991,7 @@ async function doSaveWish(){
   const f=wishForm;if(!f)return;
   if(!f.name.trim()){showToast("⚠️ Ponle un nombre");return;}
   const d=D();
-  const data={name:f.name.trim(),kind:f.kind,price:Number(f.price)||0,note:f.note||""};
+  const data={name:f.name.trim(),kind:f.kind,price:Number(f.price)||0,note:f.note||"",group:f.group||null};
   const wishlist=f.id
     ?(d.wishlist||[]).map(w=>w.id===f.id?{...w,...data}:w)
     :[...(d.wishlist||[]),{id:Date.now(),...data,status:"pendiente",date:today()}];
@@ -3980,7 +4001,7 @@ async function doSaveWish(){
 }
 function doEditWish(id){
   const w=(D().wishlist||[]).find(x=>x.id===id);if(!w)return;
-  wishForm={id:w.id,name:w.name,kind:w.kind,price:w.price?String(w.price):"",note:w.note||""};
+  wishForm={id:w.id,name:w.name,kind:w.kind,price:w.price?String(w.price):"",note:w.note||"",group:w.group||null};
   render();
 }
 async function doToggleWish(id){
