@@ -202,6 +202,20 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--gold);margin:0;}
 .rec-row{padding:10px 0;border-bottom:1px solid color-mix(in srgb, var(--line) 13%, transparent);gap:10px;align-items:flex-start;}
 .rec-help{font-size:11.5px;color:var(--ink3);line-height:1.5;margin:-4px 0 12px;}
 @media (max-width:420px){.rec-row{flex-wrap:wrap;}.rec-row>div:last-child{width:100%;justify-content:flex-end;}}
+.imp-deck{position:relative;margin:6px 0 14px;padding:4px;overflow:hidden;}
+.imp-card{position:relative;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;background:var(--card);border:2px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--card-shadow);transition:transform .16s ease,border-color .15s;}
+.imp-card.drag{transition:none;cursor:grabbing;}
+.imp-card.go-r{border-color:var(--good);} .imp-card.go-l{border-color:var(--pb);} .imp-card.go-u{border-color:var(--ink3);}
+.imp-merchant{font-size:19px;font-weight:700;color:var(--ink);overflow-wrap:anywhere;margin-bottom:4px;}
+.imp-amt{font-size:30px;font-weight:700;font-family:var(--num);color:var(--ink);margin:10px 0;}
+.imp-acts{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;}
+.imp-acts .btn{margin:0;padding:12px 4px;font-size:14px;}
+.imp-row{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);}
+.imp-row select{margin:0;padding:6px 8px;font-size:13px;width:auto;max-width:42%;}
+.imp-row .d{flex:1;min-width:0;font-size:13px;color:var(--ink);overflow-wrap:anywhere;}
+.imp-hint{font-size:12px;color:var(--ink2);margin-top:6px;}
+.imp-warn{font-size:12px;color:var(--gold);margin-top:8px;}
+.imp-tag{background:var(--inset);color:var(--ink2);margin:0 6px 6px 0;}
 </style>
 </head>
 <body>
@@ -1605,11 +1619,13 @@ function renderDebtsCard(debts,d){
 
 // ── Agregar ────────────────────────────────────────────────────────────────
 function renderAgregar(){
+  if(imp)return renderImport();
   const d=D();
   const f=formState;
   const cats=f.user==="shared"?(d.cats.shared||[]):(d.cats.personal||[]);
   const selCat=f.category||cats[0]||"";
   return`<div class="sec">
+    ${editId?"":`<button class="btn btn-dark" id="imp-open" onclick="openImport()">📥 Importar extracto del banco</button>`}
     <div class="card">
       <div class="ct">${editId?"Editar registro":"Nuevo registro"}</div>
       <div class="chips">
@@ -2852,6 +2868,93 @@ async function pdfToLines(file,password){
   try{doc.destroy();}catch(e){}
   return lines;
 }
+// ── Interfaz del importador (vive en la pestaña Registrar; el sondeo de 30 s no la redibuja) ──
+let imp=null;     // estado del importador; null = cerrado
+let impFile=null; // PDF elegido, solo en memoria (para reintentar con contraseña)
+const IMPORT_OWNER="B"; // los extractos son de John
+const DEC_LABEL={shared:"Compartido",B:"Mío",skip:"No registrar"};
+function impDateLabel(iso){if(!iso)return"";const p=iso.split("-");return Number(p[2])+" "+Object.keys(MESES_CORTOS)[Number(p[1])-1]+" "+p[0];}
+function impPeriodLabel(per){return per?impDateLabel(per.from)+"–"+impDateLabel(per.to):"";}
+function impHead(title){return`<div class="row" style="margin-bottom:12px;"><div class="ct" style="margin:0;">${title}</div><button class="btn-sm btn-dark" onclick="closeImport()">✕ Salir</button></div>`;}
+function openImport(){imp={step:"pick",err:""};impFile=null;render();}
+function closeImport(force){
+  if(!force&&imp&&imp.dec&&Object.keys(imp.dec).length&&!confirm("¿Salir sin guardar? Se pierden las decisiones."))return;
+  imp=null;impFile=null;render();
+}
+async function onImportFile(input){const f=input.files&&input.files[0];if(!f)return;impFile=f;await readImport();}
+async function readImport(password){
+  imp={step:"loading",err:""};render();
+  let lines;
+  try{lines=await pdfToLines(impFile,password);}
+  catch(e){
+    if(e&&e.name==="PasswordException")imp={step:"password",err:e.code===2?"Contraseña incorrecta. Intenta de nuevo.":""};
+    else if(e&&e.message==="PDFJS_LOAD")imp={step:"pick",err:"No se pudo cargar el lector de PDF. Revisa tu conexión a internet."};
+    else imp={step:"pick",err:"No pude abrir este PDF."};
+    render();return;
+  }
+  const bank=detectBank(lines);
+  if(!bank){
+    imp={step:"pick",err:lines.length<3?"Este PDF no tiene texto (parece escaneado). Descarga el extracto original del banco.":"No reconozco este extracto. Por ahora solo leo la tarjeta Davibank."};
+    render();return;
+  }
+  importParsed(bank.parse(lines));
+}
+function submitImportPassword(){const el=document.getElementById("imp-pw");const v=el?el.value:"";if(el)el.value="";readImport(v);}
+function importParsed(parsed){
+  const res=classifyImport(parsed,D());
+  const ds=res.cards.map(c=>c.date).filter(Boolean).sort();
+  const per=parsed.period||{};
+  imp={step:"range",err:"",parsed,res,from:ds[0]||per.from||today(),to:ds[ds.length-1]||per.to||today(),showDisc:false,deck:[],idx:0,dec:{},hist:[],cat:{}};
+  render();
+}
+function impInRange(){return imp.res.cards.filter(c=>c.date>=imp.from&&c.date<=imp.to);}
+function setImportRange(k,v){if(!v||!imp)return;imp[k]=v;render();}
+function toggleImportDisc(){imp.showDisc=!imp.showDisc;render();}
+function startDeck(){
+  const deck=impInRange();
+  if(!deck.length){showToast("No hay compras en ese rango");return;}
+  imp.deck=deck;imp.idx=0;imp.dec={};imp.hist=[];imp.cat={};imp.step="deck";render();
+}
+function renderImport(){
+  const d=D();
+  const err=imp.err?`<div class="imp-warn" id="imp-err">⚠️ ${escH(imp.err)}</div>`:"";
+  if(imp.step==="pick"||imp.step==="loading")return`<div class="sec"><div class="card">${impHead("📥 Importar extracto")}
+    <div class="lbl" style="margin-bottom:12px;">Elige el PDF del extracto. Se lee aquí mismo en tu dispositivo; el archivo no se sube a ningún lado.</div>
+    ${imp.step==="loading"?`<div class="lbl" id="imp-loading">Leyendo el extracto…</div>`:`<input type="file" id="imp-file" accept="application/pdf,.pdf" onchange="onImportFile(this)"/>`}
+    ${err}</div></div>`;
+  if(imp.step==="password")return`<div class="sec"><div class="card">${impHead("🔒 PDF con contraseña")}
+    <div class="lbl" style="margin-bottom:10px;">Este extracto tiene contraseña (suele ser tu cédula). No se guarda.</div>
+    <form onsubmit="event.preventDefault();submitImportPassword();">
+      <input type="password" id="imp-pw" autocomplete="off" placeholder="Contraseña del PDF"/>
+      <button class="btn" type="submit">Abrir</button>
+    </form>${err}</div></div>`;
+  if(imp.step==="range")return renderImportRange(d);
+  if(imp.step==="deck")return renderSwipe(d);
+  return renderImportSummary(d);
+}
+function renderImportRange(d){
+  const r=imp.res,ctl=r.control,n=impInRange().length;
+  const ctlHtml=ctl.declared===null
+    ?`<div class="imp-warn" id="imp-ctl">⚠️ No encontré el total del extracto para comprobar la lectura.</div>`
+    :ctl.diff===0
+      ?`<div class="imp-hint green" id="imp-ctl">✓ Lectura completa: cuadra con el total del extracto (${fmt(ctl.declared)}).</div>`
+      :`<div class="imp-warn" id="imp-ctl">⚠️ Lo leído difiere en ${fmt(Math.abs(ctl.diff))} del total del extracto (${fmt(ctl.declared)}). Puede faltar o sobrar una fila; puedes seguir o salir.</div>`;
+  return`<div class="sec"><div class="card">${impHead("📥 "+escH(imp.parsed.label))}
+    <div class="lbl">Periodo facturado: ${impPeriodLabel(imp.parsed.period)||"no encontrado"}</div>
+    ${ctlHtml}
+    <label class="fl" style="margin-top:14px;">Desde</label>
+    <input type="date" id="imp-from" value="${imp.from}" onchange="setImportRange('from',this.value)"/>
+    <label class="fl">Hasta</label>
+    <input type="date" id="imp-to" value="${imp.to}" onchange="setImportRange('to',this.value)"/>
+    <button class="btn" id="imp-start" onclick="startDeck()" ${n?"":"disabled"}>Clasificar ${n} ${n===1?"movimiento":"movimientos"}</button>
+    <div class="imp-hint">Desliza → compartido · ← mío · ↑ no registrar. Nada se guarda hasta el final.</div>
+    <div class="chips" style="margin-top:10px;"><div class="chip" id="imp-disc-btn" onclick="toggleImportDisc()">${r.discarded.length} descartados automáticamente · ${imp.showDisc?"ocultar":"ver"}</div></div>
+    ${imp.showDisc?`<div id="imp-disc">${r.discarded.map(x=>`<div class="imp-row"><div class="d">${escH(x.desc)}<div class="imp-hint" style="margin:0;">${impDateLabel(x.date)} · ${escH(x.reason)}</div></div><div class="val">${fmt(x.amount)}</div></div>`).join("")}</div>`:""}
+  </div></div>`;
+}
+// Task 6 reemplaza renderSwipe y Task 7 reemplaza renderImportSummary.
+function renderSwipe(d){return`<div class="sec"><div class="card">${impHead("Clasificar")}</div></div>`;}
+function renderImportSummary(d){return`<div class="sec"><div class="card">${impHead("Resumen")}</div></div>`;}
 // ═══ FIN IMPORTAR EXTRACTOS ═════════════════════════════════════════════════
 
 // ── Actions ────────────────────────────────────────────────────────────────
