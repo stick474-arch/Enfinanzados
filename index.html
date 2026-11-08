@@ -2953,7 +2953,6 @@ function renderImportRange(d){
     ${imp.showDisc?`<div id="imp-disc">${r.discarded.map(x=>`<div class="imp-row"><div class="d">${escH(x.desc)}<div class="imp-hint" style="margin:0;">${impDateLabel(x.date)} · ${escH(x.reason)}</div></div><div class="val">${fmt(x.amount)}</div></div>`).join("")}</div>`:""}
   </div></div>`;
 }
-// Task 6 reemplaza renderSwipe y Task 7 reemplaza renderImportSummary.
 function impCat(c,dec){const o=imp.cat[c.key];return o&&catListFor(D(),dec).indexOf(o)>=0?o:suggestCategory(c.desc,dec,D());}
 function impTotals(){
   const d=D();let shared=0,mine=0,skip=0;
@@ -3026,7 +3025,56 @@ document.addEventListener("keydown",e=>{
   if(k&&imp.step==="deck"){e.preventDefault();decide(k);}
   else if(e.key==="Backspace"){e.preventDefault();undoDecide();}
 });
-function renderImportSummary(d){return`<div class="sec"><div class="card">${impHead("Resumen")}</div></div>`;}
+function setImportCat(key,v){imp.cat[key]=v;}
+function cycleImportDec(key){const o=["shared",IMPORT_OWNER,"skip"];imp.dec[key]=o[(o.indexOf(imp.dec[key])+1)%o.length];render();}
+function renderImportSummary(d){
+  const t=impTotals();
+  const of=dec=>imp.deck.filter(c=>imp.dec[c.key]===dec);
+  const nSave=of("shared").length+of(IMPORT_OWNER).length;
+  const block=(dec,title)=>{
+    const list=of(dec);if(!list.length)return"";
+    return`<div class="fl" style="margin-top:14px;">${title} (${list.length})</div>`+list.map(c=>`<div class="imp-row">
+      <div class="d">${escH(c.desc)}<div class="imp-hint" style="margin:0;">${impDateLabel(c.date)} · ${fmt(c.amount)}</div></div>
+      ${dec==="skip"?"":`<select onchange="setImportCat('${c.key}',this.value)">${catListFor(d,dec).map(x=>`<option${x===impCat(c,dec)?" selected":""}>${escH(x)}</option>`).join("")}</select>`}
+      <button class="btn-sm btn-dark" title="Cambiar decisión" onclick="cycleImportDec('${c.key}')">${dec==="shared"?"→":dec==="skip"?"↑":"←"}</button>
+    </div>`).join("");
+  };
+  return`<div class="sec"><div class="card">${impHead("Resumen")}
+    <div class="row"><span class="lbl">Compartido</span><span class="val" id="imp-sum-shared">${fmt(t.shared)}</span></div>
+    <div class="row"><span class="lbl">${escH(d.names.A)} debe (${d.split.A}%)</span><span class="val green" id="imp-sum-owes">${fmt(t.owes)}</span></div>
+    <div class="row"><span class="lbl">Mío</span><span class="val" id="imp-sum-mine">${fmt(t.mine)}</span></div>
+    <div class="row"><span class="lbl">No registrar</span><span class="val">${t.skip}</span></div>
+    <button class="btn btn-green" id="imp-save" onclick="doSaveImport()" ${saving||!nSave&&!t.skip?"disabled":""}>Guardar ${nSave} ${nSave===1?"gasto":"gastos"}</button>
+    <button class="btn btn-dark" onclick="closeImport()">Salir sin guardar</button>
+    <button class="btn-sm btn-dark" onclick="undoDecide()">↶ Volver a la última tarjeta</button>
+    ${block("shared","Compartido")}${block(IMPORT_OWNER,"Mío")}${block("skip","No registrar")}
+    <div class="imp-hint">Toca la flecha de una fila para cambiar su decisión.</div>
+  </div></div>`;
+}
+async function doSaveImport(){
+  if(!imp||imp.step!=="summary"||saving)return;
+  const d=D();
+  const rules={...(d.importRules||{})};
+  const skipped=(d.importSkipped||[]).slice();
+  const note="Extracto "+imp.parsed.label+" "+impPeriodLabel(imp.parsed.period);
+  const base=Date.now(),news=[];
+  imp.deck.forEach((c,i)=>{
+    const dec=imp.dec[c.key];if(!dec)return;
+    if(dec==="skip"){
+      if(c.merchant)rules[c.merchant]={decision:"skip"};
+      if(skipped.indexOf(c.key)<0)skipped.push(c.key);
+      return;
+    }
+    const category=impCat(c,dec);
+    if(c.merchant)rules[c.merchant]={decision:dec,category};
+    const e={id:base+i,type:"expense",user:dec==="shared"?"shared":IMPORT_OWNER,registeredBy:IMPORT_OWNER,amount:c.amount,date:c.date,description:c.desc,category,isRecurring:false,note,importKey:c.key};
+    if(dec==="shared")e.paidBy=IMPORT_OWNER;
+    news.push(e);
+  });
+  imp=null;impFile=null;tab="resumen";
+  await persist({...d,entries:[...(d.entries||[]),...news],importRules:rules,importSkipped:skipped});
+  showToast("✓ "+news.length+" gastos importados");
+}
 // ═══ FIN IMPORTAR EXTRACTOS ═════════════════════════════════════════════════
 
 // ── Actions ────────────────────────────────────────────────────────────────
