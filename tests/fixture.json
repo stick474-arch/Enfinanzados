@@ -1,0 +1,15 @@
+{
+  "entries": [
+    {"id": 1, "type": "expense", "user": "shared", "paidBy": "A", "registeredBy": "A", "amount": 8000, "date": "2026-09-22", "description": "Mercado tienda", "category": "Mercado", "isRecurring": false},
+    {"id": 2, "type": "expense", "user": "B", "registeredBy": "B", "amount": 60000, "date": "2026-10-13", "description": "CINE PRUEBA", "category": "Entretenimiento", "isRecurring": false, "importKey": "davibank|2026-10-13|111111|60000"}
+  ],
+  "balances": {"A": 0, "B": 0},
+  "names": {"A": "Marce", "B": "John"},
+  "cats": {
+    "shared": ["Casa / Arriendo", "Parqueadero", "Servicios", "Mercado", "Deuda banco", "Otro compartido"],
+    "personal": ["Transporte", "Ropa", "Salud", "Entretenimiento", "Deuda personal", "Otro personal"]
+  },
+  "split": {"A": 50, "B": 50},
+  "importRules": {"DIDI": {"decision": "B", "category": "Transporte"}},
+  "importSkipped": ["davibank|2026-10-12|222222|6850"]
+}

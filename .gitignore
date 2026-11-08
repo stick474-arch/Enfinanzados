@@ -4,3 +4,4 @@ _live_data*.json
 _spec_notes.md
 Pagos Casa/
 Pagos Casa-*.zip
+tests/.cache/
