@@ -246,7 +246,7 @@ function emptyState(){
     cats:{shared:["Casa / Arriendo","Parqueadero","Servicios","Mercado","Deuda banco","Otro compartido"],
     personal:["Transporte","Ropa","Salud","Entretenimiento","Deuda personal","Otro personal"]},
     goals:[],split:{A:50,B:50},recurring:[],budgets:{},loans:[],viajes:[],catSettled:[],trash:[],
-    terceros:[],wishlist:[],juntos:{saldoInicial:0},
+    terceros:[],wishlist:[],juntos:{saldoInicial:0},importRules:{},importSkipped:[],
     plan:{strategy:"avalanche",extraSim:500000,allocAhorro:0,allocDeuda:0}};
 }
 
@@ -424,7 +424,7 @@ function nm(u){const n=D().names;return u==="A"?n.A:u==="B"?n.B:"Compartido";}
 function D(){return localData||emptyState();}
 function migrate(d){
   const e=emptyState();
-  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled","trash","plan","terceros","wishlist","juntos"].forEach(k=>{if(!d[k])d[k]=e[k];});
+  ["names","cats","goals","split","settled","recurring","budgets","loans","entries","balances","viajes","catSettled","trash","plan","terceros","wishlist","juntos","importRules","importSkipped"].forEach(k=>{if(!d[k])d[k]=e[k];});
   if(!d.plan.strategy)d.plan.strategy="avalanche";
   return d;
 }
@@ -2753,6 +2753,58 @@ const IMPORT_BANKS=[
    test:lines=>lines.some(l=>/Extracto de tu tarjeta de cr.dito/i.test(l.text))&&lines.some(l=>/davibank/i.test(l.text))}
 ];
 function detectBank(lines){return IMPORT_BANKS.find(b=>b.test(lines))||null;}
+function impUpper(desc){return String(desc||"").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");}
+function merchantKey(desc){return impUpper(desc).replace(/[^A-Z ]/g," ").replace(/\s+/g," ").trim();}
+function importKey(bank,row){return [bank,row.date,row.ref||merchantKey(row.desc),row.amount].join("|");}
+function daysApart(a,b){return Math.abs(Date.parse(a)-Date.parse(b))/864e5;}
+function findDuplicate(row,d){
+  return (d.entries||[]).find(e=>e.type==="expense"&&Number(e.amount)===row.amount&&e.date&&daysApart(e.date,row.date)<=3)||null;
+}
+// [patrón sobre el texto en mayúsculas, categoría si es compartido, categoría si es mío]
+const IMPORT_KEYWORDS=[
+  [/\b(JUMBO|EXITO|CARULLA|OLIMPICA|D1|ARA|ISIMO|VAQUITA|SUPERMERCAD\w*|MERCADO|MAKRO|PRICESMART|ALKOSTO)\b/,"Mercado","Otro personal"],
+  [/\b(FARMA\w*|DROG\w*|CRUZ VERDE|LOCATEL)\b/,"Otro compartido","Salud"],
+  [/\b(EDS|TERPEL|PRIMAX|BIOMAX|UBER|CABIFY|PEAJE\w*|PARQUEADERO|PARKING)\b|^(DLO\W*)?DIDI$/,"Otro compartido","Transporte"],
+  [/\b(MULTIPLEX|CINE\w*|PROCINAL|NETFLIX|SPOTIFY|HBO\w*|HELPHBOMAXCOM|DISNEY|STEAM|PLAYSTATION|XBOX|MICROSOFT\w*|ENTRETENIMIENTO)\b/,"Otro compartido","Entretenimiento"],
+  [/\b(EPM|CLARO|MOVISTAR|TIGO|UNE|ETB|INTERNET)\b/,"Servicios","Otro personal"],
+  [/\b(SEGURO|INTERESES|CUOTA DE MANEJO)\b/,"Deuda banco","Deuda personal"]
+];
+function catListFor(d,dec){const c=d.cats||{};return dec==="shared"?(c.shared||[]):(c.personal||[]);}
+function suggestCategory(desc,dec,d){
+  const list=catListFor(d,dec);
+  const rule=(d.importRules||{})[merchantKey(desc)];
+  if(rule&&rule.decision===dec&&list.indexOf(rule.category)>=0)return rule.category;
+  const up=impUpper(desc);
+  for(const [re,sh,pe] of IMPORT_KEYWORDS){
+    if(re.test(up)){const c=dec==="shared"?sh:pe;if(list.indexOf(c)>=0)return c;break;}
+  }
+  return list.find(c=>/^Otro/i.test(c))||list[0]||"";
+}
+function classifyImport(parsed,d){
+  const done=new Set((d.entries||[]).map(e=>e.importKey).filter(Boolean));
+  const skipped=new Set(d.importSkipped||[]);
+  const seen={},cards=[],discarded=[];
+  let computed=0;
+  parsed.rows.forEach(r=>{
+    if(r.section==="periodo"||(r.section==="anterior"&&r.cuotaOf===1))computed+=r.amount;
+    let key=importKey(parsed.bank,r);
+    seen[key]=(seen[key]||0)+1;
+    if(seen[key]>1)key+="#"+seen[key];
+    const item={...r,key,merchant:merchantKey(r.desc)};
+    let reason="";
+    if(r.section==="pago")reason="Pago o abono a la tarjeta";
+    else if(/^KTAL PAGO ALTERNO/i.test(r.desc))reason="Traslado del pago mínimo alterno (no es una compra)";
+    else if(r.section==="anterior"&&r.cuotaOf>1)reason="Compra a cuotas de un periodo anterior (ya facturada)";
+    else if(r.amount<=0)reason="Valor negativo o en cero (reverso o ajuste)";
+    else if(done.has(key))reason="Ya importada antes";
+    else if(skipped.has(key))reason="Ya la marcaste como no registrar";
+    if(reason)discarded.push({...item,reason});
+    else cards.push({...item,dup:findDuplicate(r,d)});
+  });
+  cards.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  const declared=parsed.declaredTotal;
+  return{cards,discarded,control:{declared,computed,diff:declared===null?null:declared-computed}};
+}
 // ═══ FIN IMPORTAR EXTRACTOS ═════════════════════════════════════════════════
 
 // ── Actions ────────────────────────────────────────────────────────────────
