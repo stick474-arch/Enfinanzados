@@ -125,4 +125,15 @@ TEST(async()=>{
   const tn=D().recurring.find(r=>r.description==="Tecno prueba");
   T.ok("check recurrente + 'Cada año' toma mes y día de la fecha",tn&&tn.freq==="yearly"&&tn.month===11&&tn.day===20,JSON.stringify(tn));
   T.ok("sin errores de pantalla",document.getElementById("content").innerText.length>0);
+
+  // "Disponible" del mes: con media quincena registrada no se cae a la mitad.
+  const mk2=thisMonth();
+  const INC2={id:301,type:"income",user:"B",category:"Nomina",description:"Nomina dos",amount:2000000,isRecurring:true};
+  const half={id:302,type:"income",user:"B",category:"Nomina",description:"Nomina dos",amount:1000000,date:mk2+"-01",autoKey:"x"};
+  const extra={id:303,type:"income",user:"B",category:"Prima",description:"Prima",amount:3000000,date:mk2+"-01"};
+  const show=entries=>{localData={...D(),recurring:[INC2],entries};__db=JSON.parse(JSON.stringify(localData));tab="resumen";render();return document.getElementById("content").textContent;};
+  const fmtN=n=>fmt(n).replace(/\s/g," ");
+  const has=(t,n)=>t.replace(/\s/g," ").indexOf(fmtN(n))>=0;
+  T.ok("media quincena: usa el plan (2.000.000)",has(show([half]),2000000));
+  T.ok("con prima: usa lo registrado (4.000.000)",has(show([half,extra]),4000000));
 });
