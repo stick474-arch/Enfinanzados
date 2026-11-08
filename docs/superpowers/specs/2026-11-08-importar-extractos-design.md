@@ -72,7 +72,7 @@ Gasto importado (mismo formato que un gasto manual, más origen):
 { id, type:"expense", user:"shared"|"B", paidBy:"B", registeredBy:"B",
   amount, date:"YYYY-MM-DD", description:"<comercio>", category,
   isRecurring:false, note:"Extracto Davibank sep–oct 2026",
-  importKey:"davibank|2026-10-13|654557|60000" }
+  importKey:"davibank|2026-10-13|123456|60000" }
 ```
 
 - `importKey` = banco | fecha | comprobante | valor. Evita reimportar cuando los
