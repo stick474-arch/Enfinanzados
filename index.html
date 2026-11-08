@@ -4180,7 +4180,7 @@ function renderJuntosMes(d){
     <div class="row" style="margin-bottom:4px;"><div class="ct" style="margin:0;">Lo que sale</div><b style="font-family:var(--num);font-size:14px;">${fmt(f.outTot)}</b></div>
     <div class="j-sub">Gastos fijos · ${fmt(f.fijos)}</div>
     ${fijos.length?fijos.map(x=>jRow(d,x,recActions(x,x.user==="shared"))).join(""):`<div style="font-size:12px;color:var(--ink3);padding:6px 0;">Aún no hay gastos fijos.</div>`}
-    ${showForm("expense")}${addBtn("expense","Agregar gasto mensual")}
+    ${showForm("expense")}${addBtn("expense","Agregar gasto fijo (mensual o anual)")}
     <div class="j-sub" style="margin-top:14px;">Cuotas de deudas · ${fmt(f.cuotas)}</div>
     ${cuotas.map(x=>jRow(d,x,`<span class="j-act" onclick="tab='deudas';deudasTab='mias';render()">ver en Deudas →</span>`)).join("")||`<div style="font-size:12px;color:var(--ink3);padding:6px 0;">Sin cuotas este mes.</div>`}
     ${f.planeado>0?`<div class="j-sub" style="margin-top:14px;">Pagos puntuales · ${fmt(f.planeado)}</div>${f.outs.filter(x=>x.kind==="plan").map(x=>jRow(d,{...x,sub:"solo este mes"},"")).join("")}`:""}
