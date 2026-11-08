@@ -1,0 +1,24 @@
+TEST(async()=>{
+  const E=window.__expected;
+  const lines=await pdfToLines(T.pdfFile());
+  T.ok("devuelve líneas con texto",lines.length>50&&typeof lines[0].text==="string");
+  T.ok("ordenadas por página y altura",lines.every((l,i)=>i===0||l.page>lines[i-1].page||(l.page===lines[i-1].page&&l.y<=lines[i-1].y)));
+  const bank=detectBank(lines);
+  T.ok("detecta Davibank",!!bank&&bank.id==="davibank");
+  const p=bank.parse(lines);
+  T.eq("periodo",p.period,E.period);
+  T.eq("total declarado",p.declaredTotal,E.declaredTotal);
+  const cnt={};p.rows.forEach(r=>{cnt[r.section]=(cnt[r.section]||0)+1;});
+  T.eq("filas por sección",cnt,E.rows);
+  const per=p.rows.filter(r=>r.section==="periodo");
+  const pick=r=>({date:r.date,ref:r.ref,desc:r.desc,amount:r.amount});
+  T.eq("primera fila",pick(per[0]),E.first);
+  T.eq("última fila",pick(per[per.length-1]),E.last);
+  T.eq("descripciones en dos líneas",per.filter(r=>r.desc===E.merged[0]).length,E.merged[1]);
+  T.ok("sin líneas sueltas como compras",!p.rows.some(r=>/^\d{4} /.test(r.desc)||r.desc.length<3));
+  const res=classifyImport(p,{entries:[],cats:emptyState().cats});
+  T.eq("control cuadra",res.control.diff,0);
+  T.eq("tarjetas",res.cards.length,E.cards);
+  T.eq("suma de tarjetas",res.cards.reduce((s,c)=>s+c.amount,0),E.cardsTotal);
+  T.eq("descartadas",res.discarded.length,E.discarded);
+});

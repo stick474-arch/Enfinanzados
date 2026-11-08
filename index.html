@@ -2805,6 +2805,53 @@ function classifyImport(parsed,d){
   const declared=parsed.declaredTotal;
   return{cards,discarded,control:{declared,computed,diff:declared===null?null:declared-computed}};
 }
+// pdf.js se carga solo al abrir un PDF. El worker se descarga con verificación de integridad y se sirve como blob.
+const PDFJS_BASE="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+const PDFJS_SRI={
+  lib:"sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==",
+  worker:"sha512-BbrZ76UNZq5BhH7LL7pn9A4TKQpQeNCHOo65/akfelcIBbcVvYWOFQKPXIrykE3qZxYjmDX573oa4Ywsc7rpTw=="
+};
+let pdfjsPromise=null;
+function loadPdfJs(){
+  if(window.pdfjsLib)return Promise.resolve(window.pdfjsLib);
+  if(pdfjsPromise)return pdfjsPromise;
+  pdfjsPromise=(async()=>{
+    await new Promise((ok,ko)=>{
+      const s=document.createElement("script");
+      s.src=PDFJS_BASE+"pdf.min.js";s.integrity=PDFJS_SRI.lib;s.crossOrigin="anonymous";
+      s.onload=ok;s.onerror=()=>ko(new Error("PDFJS_LOAD"));
+      document.head.appendChild(s);
+    });
+    const r=await fetch(PDFJS_BASE+"pdf.worker.min.js",{integrity:PDFJS_SRI.worker});
+    if(!r.ok)throw new Error("PDFJS_LOAD");
+    const url=URL.createObjectURL(new Blob([await r.text()],{type:"text/javascript"}));
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc=url;
+    return window.pdfjsLib;
+  })().catch(()=>{pdfjsPromise=null;throw new Error("PDFJS_LOAD");});
+  return pdfjsPromise;
+}
+// Texto del PDF agrupado en líneas: piezas a ±2 puntos de altura forman una línea, de izquierda a derecha.
+async function pdfToLines(file,password){
+  const lib=await loadPdfJs();
+  const data=new Uint8Array(await file.arrayBuffer());
+  const doc=await lib.getDocument({data,password:password||undefined}).promise;
+  const lines=[];
+  for(let p=1;p<=doc.numPages;p++){
+    const tc=await (await doc.getPage(p)).getTextContent();
+    const pg=[];
+    tc.items.forEach(it=>{
+      const str=it.str||"";if(!str.trim())return;
+      const x=it.transform[4],y=it.transform[5];
+      let ln=pg.find(l=>Math.abs(l.y-y)<=2);
+      if(!ln){ln={page:p,y,items:[]};pg.push(ln);}
+      ln.items.push({x,str});
+    });
+    pg.sort((a,b)=>b.y-a.y);
+    pg.forEach(l=>{l.items.sort((a,b)=>a.x-b.x);l.text=l.items.map(i=>i.str.trim()).filter(Boolean).join(" ");lines.push(l);});
+  }
+  try{doc.destroy();}catch(e){}
+  return lines;
+}
 // ═══ FIN IMPORTAR EXTRACTOS ═════════════════════════════════════════════════
 
 // ── Actions ────────────────────────────────────────────────────────────────
