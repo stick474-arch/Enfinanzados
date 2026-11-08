@@ -2989,9 +2989,9 @@ function renderSwipe(d){
       <div class="imp-hint" id="imp-cats">Compartido: ${escH(impCat(c,"shared"))} · Mío: ${escH(impCat(c,IMPORT_OWNER))}</div>
     </div></div>
     <div class="imp-acts">
-      <button class="btn" style="background:var(--pb);color:#fff;" onclick="decide('${IMPORT_OWNER}')">← Mío</button>
+      <button class="btn" style="background:var(--pb);color:var(--on-accent);" onclick="decide('${IMPORT_OWNER}')">← Mío</button>
       <button class="btn btn-dark" onclick="decide('skip')">↑ No</button>
-      <button class="btn btn-green" onclick="decide('shared')">Compartido →</button>
+      <button class="btn btn-green" style="color:var(--on-accent);" onclick="decide('shared')">Compartido →</button>
     </div>
     <button class="btn-sm btn-dark" id="imp-undo" onclick="undoDecide()" ${imp.hist.length?"":"disabled"}>↶ Deshacer</button>
     <div class="imp-hint" id="imp-live">Compartido ${fmt(t.shared)} · Mío ${fmt(t.mine)} · Sin registrar ${t.skip}</div>
@@ -3044,7 +3044,7 @@ function renderImportSummary(d){
     <div class="row"><span class="lbl">${escH(d.names.A)} debe (${d.split.A}%)</span><span class="val green" id="imp-sum-owes">${fmt(t.owes)}</span></div>
     <div class="row"><span class="lbl">Mío</span><span class="val" id="imp-sum-mine">${fmt(t.mine)}</span></div>
     <div class="row"><span class="lbl">No registrar</span><span class="val">${t.skip}</span></div>
-    <button class="btn btn-green" id="imp-save" onclick="doSaveImport()" ${saving||!nSave&&!t.skip?"disabled":""}>Guardar ${nSave} ${nSave===1?"gasto":"gastos"}</button>
+    <button class="btn btn-green" style="color:var(--on-accent);" id="imp-save" onclick="doSaveImport()" ${saving||!nSave&&!t.skip?"disabled":""}>Guardar ${nSave} ${nSave===1?"gasto":"gastos"}</button>
     <button class="btn btn-dark" onclick="closeImport()">Salir sin guardar</button>
     <button class="btn-sm btn-dark" onclick="undoDecide()">↶ Volver a la última tarjeta</button>
     ${block("shared","Compartido")}${block(IMPORT_OWNER,"Mío")}${block("skip","No registrar")}
