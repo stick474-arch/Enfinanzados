@@ -49,6 +49,7 @@ window.T={R:[],
  pdfFile(){const b=Uint8Array.from(atob(window.__pdfB64),c=>c.charCodeAt(0));return new File([b],'extracto.pdf',{type:'application/pdf'});},
  done(){if(__errs.length)this.R.push('FAIL errores JS -> '+JSON.stringify(__errs));const txt=this.R.join('\n');
   const p=document.createElement('pre');p.id='RES';p.textContent=txt;document.body.appendChild(p);
+  try{if(parent!==window)parent.postMessage({__res:txt},'*');}catch(e){}
   if(location.protocol.indexOf('http')===0)__realFetch('/__result',{method:'POST',body:txt});}};
 window.TEST=fn=>{(async()=>{await T.sleep(400);await fn();})().catch(e=>T.ok('la prueba no se cayó',false,e&&e.stack||e)).then(()=>T.done());};
 </script>"""
@@ -72,10 +73,22 @@ def build(a):
     open(out, "w", encoding="utf-8").write(s)
     return out
 
+MIN_W = 500  # Chrome sin interfaz no baja de 500 px: para menos, la app corre en un marco de ese ancho
+
+def frame(out, width):
+    f = os.path.join(CACHE, "frame.html")
+    open(f, "w", encoding="utf-8").write(
+        '<!doctype html><meta charset="utf-8"><body style="margin:0;background:#888">'
+        f'<iframe src="{os.path.basename(out)}" style="width:{width}px;height:900px;border:0;display:block"></iframe>'
+        "<script>addEventListener('message',e=>{if(e.data&&e.data.__res!=null){const p=document.createElement('pre');"
+        "p.id='RES';p.textContent=e.data.__res;document.body.appendChild(p);}});</script></body>")
+    return f
+
 def run_file(out, a):
-    url = "file:///" + out.replace("\\", "/")
+    page = frame(out, a.width) if a.width < MIN_W else out
+    url = "file:///" + page.replace("\\", "/")
     cmd = [CHROME, "--headless=new", "--disable-gpu", "--allow-file-access-from-files",
-           f"--window-size={a.width},900", "--virtual-time-budget=30000"]
+           f"--window-size={max(a.width, MIN_W)},900", "--virtual-time-budget=30000"]
     o = subprocess.run(cmd + ["--dump-dom", url], capture_output=True, timeout=240).stdout.decode("utf-8", "replace")
     if a.shot:
         subprocess.run(cmd + ["--screenshot=" + os.path.abspath(a.shot), url], capture_output=True, timeout=240)

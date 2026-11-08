@@ -196,6 +196,12 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--gold);margin:0;}
   .j-tile .v{font-size:16px;}
   .grid-2>*{min-width:0;}
 }
+.rec-due-row{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid color-mix(in srgb, var(--line) 13%, transparent);}
+.rec-due-row:last-child{border-bottom:none;padding-bottom:0;}
+.rec-due-acts{display:flex;gap:6px;justify-content:flex-end;margin-top:6px;}
+.rec-row{padding:10px 0;border-bottom:1px solid color-mix(in srgb, var(--line) 13%, transparent);gap:10px;align-items:flex-start;}
+.rec-help{font-size:11.5px;color:var(--ink3);line-height:1.5;margin:-4px 0 12px;}
+@media (max-width:420px){.rec-row{flex-wrap:wrap;}.rec-row>div:last-child{width:100%;justify-content:flex-end;}}
 </style>
 </head>
 <body>
@@ -401,8 +407,9 @@ function fmtAmountInput(el,setter){
 }
 // Format an initial value for display in an amount field
 function fmtInit(v){if(v===""||v===null||v===undefined)return "";return new Intl.NumberFormat("es-CO").format(parseInt(v)||0);}
-const today=()=>new Date().toISOString().slice(0,10);
-const thisMonth=()=>new Date().toISOString().slice(0,7);
+// Fecha local (Colombia), no UTC: con toISOString después de las 7 p. m. salía el día siguiente.
+const today=()=>{const t=new Date();return t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")+"-"+String(t.getDate()).padStart(2,"0");};
+const thisMonth=()=>today().slice(0,7);
 const ICONS={"Casa / Arriendo":"🏠","Parqueadero":"🚗","Servicios":"💡","Mercado":"🛒","Deuda banco":"🏦","Otro compartido":"📦","Transporte":"🚌","Ropa":"👗","Salud":"💊","Entretenimiento":"🎬","Deuda personal":"💳","Otro personal":"🎒"};
 const hasEmoji=s=>/^\p{Emoji_Presentation}/u.test(s||"");
 const icon=c=>{if(!c)return"📌";if(hasEmoji(c))return"";return ICONS[c]||"📌";};
@@ -676,6 +683,7 @@ function fixedOutflowsForMonth(d,monthKey){
       if(r.user==="shared"&&casa)return; // lo real se suma una sola vez abajo
       fixed+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
     }else if(r.type==="expense"){
+      if(!recInMonth(r,monthKey))return;
       const amt=ovTotal(r.overrides&&r.overrides[monthKey],r.amount);
       fixed+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
     }
@@ -759,7 +767,8 @@ async function doCopiarAsignaciones(){
 function monthlyLivingCost(d,monthKey){
   const sp=d.split||{A:50,B:50};let c=0;
   (d.recurring||[]).forEach(r=>{if(r.type!=="expense")return;
-    const amt=ovTotal(r.overrides&&r.overrides[monthKey],r.amount);
+    // Un pago anual pesa su doceava parte en el costo de vida de cada mes.
+    const amt=isYearly(r)?(Number(r.amount)||0)/12:ovTotal(r.overrides&&r.overrides[monthKey],r.amount);
     c+=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);});
   return Math.round(c);
 }
@@ -820,7 +829,7 @@ function simulatePayoff(d,strategy,extraMonthly,maxMonths){
 }
 function forecastNextMonthFixed(d){
   const mk=thisMonth();const sp=d.split||{A:50,B:50};const items=[];
-  (d.recurring||[]).forEach(r=>{if(r.type!=="expense")return;
+  (d.recurring||[]).forEach(r=>{if(r.type!=="expense"||!recInMonth(r,mk))return;
     const amt=ovTotal(r.overrides&&r.overrides[mk],r.amount);
     const share=r.user==="shared"?amt*(sp.B/100):(r.user==="B"?amt:0);
     if(share>0)items.push({name:r.description||r.category,amount:Math.round(share)});});
@@ -1375,6 +1384,7 @@ function renderResumen(){
   const hayMovsSemana=(d.entries||[]).some(e=>e.date>=wa2.toISOString().slice(0,10)&&e.type==="expense");
   return`<div class="sec">
     ${notifHtml}
+    ${renderRecDueCard(d)}
     ${heroHtml}
     ${semHtml}
     <div class="grid-2">
@@ -1656,25 +1666,36 @@ function renderAgregar(){
         <div class="chip${f.registeredBy==="B"?" on":""}" onclick="setForm('registeredBy','B')">${d.names.B}</div>
       </div>
       ${!editId?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:10px 12px;background:var(--inset);border-radius:10px;border:1px solid var(--line);">
-        <input type="checkbox" id="f-recur" ${f.isRecurring?"checked":""} onchange="formState.isRecurring=this.checked"/>
-        <label for="f-recur" style="font-size:13px;color:var(--ink2);cursor:pointer;">🔄 ${f.type==="income"?"Ingreso":f.type==="debt"?"Deuda":"Gasto"} recurrente mensual</label>
-      </div>`:""}
+        <input type="checkbox" id="f-recur" ${f.isRecurring?"checked":""} onchange="formState.isRecurring=this.checked;render()"/>
+        <label for="f-recur" style="font-size:13px;color:var(--ink2);cursor:pointer;">🔄 ${f.type==="income"?"Ingreso":f.type==="debt"?"Deuda":"Gasto"} recurrente</label>
+      </div>
+      ${f.isRecurring&&f.type==="expense"?`<div class="chips" style="margin-top:-4px;">
+        <div class="chip${f.recFreq!=="yearly"?" on":""}" onclick="formState.recFreq='monthly';render()">Cada mes · día ${Number((f.date||today()).slice(8))}</div>
+        <div class="chip${f.recFreq==="yearly"?" on":""}" onclick="formState.recFreq='yearly';render()">Cada año · ${dayLabel(f.date||today())}</div>
+      </div>`:f.isRecurring&&f.type==="income"?`<div class="rec-help" style="margin-top:-4px;margin-bottom:12px;">Se registrará solo cada quincena (15 y 30). Puedes cambiarlo en la lista de recurrentes.</div>`:""}`:""}
       <button class="btn" onclick="doSaveEntry()" ${saving?"disabled":""}>
         ${saving?"Guardando…":editId?"💾 Guardar cambios":"＋ Agregar"}
       </button>
       ${editId?`<button class="btn btn-dark" onclick="editId=null;moreTab='movimientos';setTab('mas')">Cancelar</button>`:""}
     </div>
     ${(D().recurring||[]).length>0?`<div class="card">
-      <div class="ct">Recurrentes — toca para agregar hoy</div>
-      ${(D().recurring||[]).map(r=>`
-        <div class="row" style="padding:10px 0;border-bottom:1px solid color-mix(in srgb, var(--line) 13%, transparent);">
-          <div><div style="font-size:13px;margin-bottom:3px;">${icon(r.category)} ${r.description}</div><span class="tag" style="background:color-mix(in srgb, var(--violet) 9%, transparent);color:var(--violet);border:1px solid color-mix(in srgb, var(--violet) 20%, transparent);">${r.category}</span></div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <span style="font-size:13px;font-family:monospace;color:var(--gold);">${fmtS(r.amount)}</span>
-            <button class="btn-sm" style="background:var(--gold);color:var(--on-accent);" onclick="doAddRecurring('${r.id}')">+ Hoy</button>
-            <span style="font-size:14px;cursor:pointer;color:var(--bad);" onclick="doDeleteRecurring('${r.id}')">✕</span>
+      <div class="ct">Recurrentes</div>
+      ${recForm&&recForm.where==="agregar"?renderRecForm(D()):""}
+      ${(D().recurring||[]).map(r=>{
+        const isCuota=r.type==="debt"&&(r.debtMonths||0)>1;
+        const amt=isCuota?recMonthAmount(r,thisMonth()):Number(r.amount)||0;
+        const noDay=r.type!=="income"&&(isYearly(r)?!(r.month&&r.day):!r.day);
+        return`<div class="row rec-row">
+          <div style="min-width:0;"><div style="font-size:13px;margin-bottom:3px;overflow-wrap:anywhere;">${icon(r.category)} ${escH(r.description)}</div>
+            <span class="tag" style="background:color-mix(in srgb, var(--violet) 9%, transparent);color:var(--violet);border:1px solid color-mix(in srgb, var(--violet) 20%, transparent);">${escH(r.category)}</span>
+            <div style="font-size:11px;margin-top:4px;color:${noDay?"var(--gold)":"var(--ink3)"};">${r.type==="income"?"💰 ":"📅 "}${recWhen(r)}${noDay?" · toca ✏️":""}</div></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+            <span style="font-size:13px;font-family:monospace;color:var(--gold);">${fmtS(amt)}${isCuota?"<span style=\"font-size:10px;color:var(--ink3);\"> /mes</span>":""}</span>
+            <button class="btn-sm" style="background:var(--gold);color:var(--on-accent);" onclick="doAddRecurring('${r.id}')">${r.type==="income"?"+ Hoy":"Registrar"}</button>
+            <span style="font-size:14px;cursor:pointer;" title="Editar" onclick="doEditRec('${r.id}','agregar')">✏️</span>
+            <span style="font-size:14px;cursor:pointer;color:var(--bad);" title="Borrar" onclick="doDeleteRecurring('${r.id}')">✕</span>
           </div>
-        </div>`).join("")}
+        </div>`;}).join("")}
     </div>`:""}
   </div>`;
 }
@@ -2682,7 +2703,12 @@ async function doSaveEntry(){
   if(editId){entries=entries.map(e=>e.id===editId?entry:e);}
   else{entries=[...entries,entry];}
   let rec=[...(d.recurring||[])];
-  if(f.isRecurring&&!editId)rec.push({id:Date.now()+1,...entry});
+  if(f.isRecurring&&!editId){
+    // El día (y el mes, si es anual) salen de la fecha del registro.
+    const dd=Number(String(f.date||today()).slice(8,10)),mm=Number(String(f.date||today()).slice(5,7));
+    const sched=f.type==="income"?{pay:"quincenal"}:(f.type==="expense"&&f.recFreq==="yearly")?{freq:"yearly",month:mm,day:dd}:{freq:"monthly",day:dd};
+    rec.push({id:Date.now()+1,...entry,...sched});
+  }
   const wasEdit=!!editId;
   editId=null;
   await persist({...d,entries,recurring:rec});
@@ -2707,7 +2733,9 @@ function doDeleteEntry(id){
   const e=(d.entries||[]).find(x=>x.id===rid);
   if(!e)return;
   const trashItem={...e,_kind:"entry",_deletedAt:today()};
-  persist({...d,entries:(d.entries||[]).filter(x=>x.id!==rid),trash:[...(d.trash||[]),trashItem]});
+  // Un ingreso registrado solo que se borra no se vuelve a crear (aunque se vacíe la papelera).
+  const recDone=e.autoKey?(d.recDone||[]).concat([e.autoKey]).slice(-200):d.recDone;
+  persist({...d,entries:(d.entries||[]).filter(x=>x.id!==rid),trash:[...(d.trash||[]),trashItem],recDone});
   showToast("🗑️ Movido a papelera");
 }
 
@@ -2828,22 +2856,37 @@ function doDeleteSettled(idx){
   showToast("✓ Saldo eliminado");
 }
 
+// Registra el recurrente de este mes. Una deuda a cuotas registra SOLO la cuota del mes
+// (antes copiaba la deuda completa, p. ej. el total del crédito del apartamento).
 async function doAddRecurring(id){
   const d=D();
   const rid=Number(id)||id;
   const r=(d.recurring||[]).find(x=>x.id===rid);
   if(!r)return;
+  const mk=thisMonth();
+  if(r.type==="debt"&&(r.debtMonths||0)>1){
+    const amt=recMonthAmount(r,mk);
+    if(amt<=0){showToast("Esta deuda no tiene cuota este mes");return;}
+    if(r.user==="shared"){
+      const s=recSplitForMonth(r,mk,Math.round(r.amount/r.debtMonths),d.split||{A:50,B:50});
+      return doPayCuotaFromProj(r.id,s.a,s.b);
+    }
+    return doPayCuotaFromProj(r.id,r.user==="A"?amt:0,r.user==="A"?0:amt);
+  }
+  const amount=recMonthAmount(r,mk)||Number(r.amount)||0;
   // Un gasto compartido necesita pagador real: sin él contaría como si John hubiera pagado todo.
-  if(r.type==="expense"&&r.user==="shared"){
+  if(r.type!=="income"&&r.user==="shared"){
     resetForm();
-    formState={...formState,type:"expense",user:"shared",category:r.category,description:r.description,amount:String(r.amount||""),date:today()};
+    formState={...formState,type:"expense",user:"shared",category:r.category,description:r.description,amount:String(amount||""),date:today()};
     tab="agregar";render();
     showToast("Elige quién pagó y guarda");
     return;
   }
-  const entry={...r,id:Date.now(),date:today()};
+  const u=r.type==="income"?(r.user==="A"?"A":"B"):r.user;
+  const entry={id:Date.now(),date:today(),type:r.type==="income"?"income":"expense",user:u,category:r.category,description:r.description,amount,isRecurring:false,registeredBy:u,recId:r.id};
+  if(r.type==="income")entry.incomeSource=r.incomeSource||"nomina";
   await persist({...d,entries:[...(d.entries||[]),entry]});
-  showToast("✓ Agregado");
+  showToast("✓ Registrado "+fmt(amount));
 }
 
 async function doDeleteRecurring(id){
@@ -2852,6 +2895,139 @@ async function doDeleteRecurring(id){
   await persist({...d,recurring:(d.recurring||[]).filter(x=>x.id!==rid),trash:[...(d.trash||[]),{...r,_kind:"recurring",_deletedAt:today()}]});
   showToast("🗑️ Movido a papelera");
 }
+
+// ═══ RECURRENTES CON FECHA ═══
+// Ingresos: se registran solos (quincenal 15 y 30, o una vez al mes en su día).
+// Pagos (gastos y cuotas): desde su día sale "¿Ya registraste o pagaste esto?".
+// Anuales (freq:"yearly", month, day): cuentan solo en su mes; el aviso sale 7 días antes.
+const REC_AUTO_FROM="2026-11-08"; // ingresos anteriores a esta fecha no se registran solos
+const REC_WARN_YEARLY=7;
+function isoDay(dt){return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");}
+function dayAdd(ds,n){const t=new Date(ds+"T12:00:00");t.setDate(t.getDate()+n);return isoDay(t);}
+function lastDayOf(mk){return new Date(Number(mk.slice(0,4)),Number(mk.slice(5,7)),0).getDate();}
+// Día del mes sin pasarse del último (30 en febrero → 28 o 29).
+function mkDay(mk,day){return mk+"-"+String(Math.min(Math.max(1,Number(day)||1),lastDayOf(mk))).padStart(2,"0");}
+function dayLabel(ds){return Number(ds.slice(8))+" "+MO_ES[Number(ds.slice(5,7))-1];}
+function isYearly(r){return r.freq==="yearly"&&r.type!=="income";}
+// ¿Cuenta este recurrente en el mes mk? Los anuales solo en su mes.
+function recInMonth(r,mk){return !isYearly(r)||Number(mk.slice(5,7))===Number(r.month);}
+// Valor del recurrente en el mes (con su ajuste si existe). Deuda a cuotas: la cuota, o 0 fuera de plazo.
+function recMonthAmount(r,mk){
+  const ov=(r.overrides&&r.overrides[mk]!=null)?r.overrides[mk]:null;
+  if(r.type==="debt"&&(r.debtMonths||0)>1){
+    const el=moElapsed((r.debtStart||mk).slice(0,7),mk);
+    if(el<0||el>=r.debtMonths)return 0;
+    return ovTotal(ov,Math.round(r.amount/r.debtMonths));
+  }
+  return ovTotal(ov,Number(r.amount)||0);
+}
+// Pagos de un ingreso en el mes: quincenal (mitad el 15, mitad el 30) o uno en su día.
+function incomeSlots(r,mk){
+  const total=recMonthAmount(r,mk);
+  if(r.pay==="monthly")return[{slot:"m",date:mkDay(mk,r.day||30),amount:total}];
+  const half=Math.round(total/2);
+  return[{slot:"q1",date:mkDay(mk,15),amount:half},{slot:"q2",date:mkDay(mk,30),amount:total-half}];
+}
+const SLOT_TXT={q1:"1.ª quincena",q2:"2.ª quincena",m:"pago del mes"};
+function recWhen(r){
+  if(r.type==="income")return r.pay==="monthly"?"Cada mes · día "+(r.day||30):"Quincenal · 15 y 30";
+  if(isYearly(r))return r.month&&r.day?"Cada año · "+r.day+" "+MO_ES[r.month-1]:"Cada año · sin fecha";
+  return r.day?"Cada mes · día "+r.day:"Cada mes · sin día de pago";
+}
+function normDesc(s){return String(s||"").trim().toLowerCase();}
+// Ingresos que ya deberían estar registrados y no lo están (hasta el día `now`).
+function autoIncomeEntries(d,now){
+  const done=d.recDone||[];const out=[];const mk=now.slice(0,7);
+  const seen=(d.entries||[]).concat(d.trash||[]);
+  // id único aunque haya otros registros creados en el mismo milisegundo
+  let nextId=Math.max(Date.now(),(d.entries||[]).reduce((m,e)=>Math.max(m,Number(e.id)||0),0)+1);
+  (d.recurring||[]).filter(r=>r.type==="income").forEach(r=>{
+    const u=r.user==="A"?"A":"B";
+    [moAdd(mk,-1),mk].forEach(m=>incomeSlots(r,m).forEach(s=>{
+      const key="inc|"+r.id+"|"+m+"|"+s.slot;
+      if(s.date>now||s.date<REC_AUTO_FROM||s.amount<=0||done.indexOf(key)>=0)return;
+      if(seen.some(e=>e.autoKey===key))return;
+      // Ya lo registraron a mano: mismo ingreso de la misma persona a ±5 días.
+      const lo=dayAdd(s.date,-5),hi=dayAdd(s.date,5);
+      if((d.entries||[]).some(e=>e.type==="income"&&!e.autoKey&&e.user===u&&normDesc(e.description)===normDesc(r.description)&&e.date>=lo&&e.date<=hi))return;
+      out.push({id:nextId++,date:s.date,type:"income",user:u,category:r.category,description:r.description,amount:s.amount,
+        incomeSource:r.incomeSource||"nomina",registeredBy:u,isRecurring:false,recId:r.id,autoKey:key,note:"Registrado solo · "+SLOT_TXT[s.slot]});
+    }));
+  });
+  return out;
+}
+let autoIncBusy=false;
+async function runAutoIncomes(now){
+  if(autoIncBusy||saving||!localData)return;
+  const d=D();const add=autoIncomeEntries(d,now||today());
+  if(!add.length)return;
+  autoIncBusy=true;
+  try{
+    await persist({...d,entries:[...(d.entries||[]),...add]});
+    showToast("💰 Se registró solo: "+add.map(e=>escH(e.description)+" "+fmt(e.amount)).join(" · "));
+  }finally{autoIncBusy=false;}
+}
+// Cuándo toca un pago y en qué ventana se busca si ya se registró.
+function recDue(r,now){
+  if(r.type==="income")return null;
+  if(isYearly(r)){
+    if(!r.month||!r.day)return null;
+    const at=y=>mkDay(y+"-"+String(r.month).padStart(2,"0"),r.day);
+    let y=Number(now.slice(0,4));let due=at(y);
+    if(dayAdd(due,60)<now){y++;due=at(y);}
+    return{key:r.id+"|"+y,due,from:dayAdd(due,-REC_WARN_YEARLY),lo:dayAdd(due,-45),hi:dayAdd(due,60),amount:recMonthAmount(r,due.slice(0,7))};
+  }
+  if(!r.day)return null;
+  const mk=now.slice(0,7);const due=mkDay(mk,r.day);
+  return{key:r.id+"|"+mk,due,from:due,lo:mk+"-01",hi:mk+"-31",amount:recMonthAmount(r,mk)};
+}
+function recPaid(d,r,info){
+  if((d.recDone||[]).indexOf(info.key)>=0)return true;
+  const n=normDesc(r.description);
+  return (d.entries||[]).some(e=>e.date&&e.date>=info.lo&&e.date<=info.hi&&(e.recId===r.id||
+    (e.type==="expense"&&e.category===r.category&&(normDesc(e.description)===n||normDesc(e.description)==="cuota "+n))));
+}
+function pendingRecs(d,now){
+  const out=[];
+  (d.recurring||[]).forEach(r=>{
+    const i=recDue(r,now);
+    if(!i||i.amount<=0||now<i.from||recPaid(d,r,i))return;
+    out.push({r,key:i.key,due:i.due,amount:i.amount});
+  });
+  return out.sort((a,b)=>a.due<b.due?-1:a.due>b.due?1:0);
+}
+async function doRecDone(key){
+  const d=D();
+  const done=(d.recDone||[]).filter(k=>k!==key).concat([key]).slice(-200);
+  await persist({...d,recDone:done});
+  showToast("✓ Listo, no te vuelvo a preguntar");
+}
+function renderRecDueCard(d){
+  const now=today();const list=pendingRecs(d,now);
+  if(!list.length)return"";
+  const when=p=>{
+    if(p.due===now)return"vence hoy";
+    if(p.due>now){const n=Math.round((new Date(p.due+"T12:00:00")-new Date(now+"T12:00:00"))/864e5);return"vence el "+dayLabel(p.due)+" · en "+n+(n===1?" día":" días");}
+    return"desde el "+dayLabel(p.due);
+  };
+  return`<div class="card card-warn">
+    <div class="ct" style="color:var(--gold);">🔔 ¿Ya registraste o pagaste esto?</div>
+    ${list.map(p=>`<div class="rec-due-row">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13.5px;overflow-wrap:anywhere;">${icon(p.r.category)} ${escH(p.r.description)}</div>
+        <div style="font-size:11px;color:var(--ink3);margin-top:2px;">${when(p)} · ${p.r.user==="shared"?"Compartido":escH(nm(p.r.user))}${isYearly(p.r)?" · anual":""}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:14px;font-weight:650;font-family:var(--num);">${fmt(p.amount)}</div>
+        <div class="rec-due-acts">
+          <button class="btn-sm" style="background:var(--gold);color:var(--on-accent);" onclick="doAddRecurring('${p.r.id}')">Registrar</button>
+          <button class="btn-sm btn-dark" onclick="doRecDone('${escH(p.key)}')">Ya está</button>
+        </div>
+      </div>
+    </div>`).join("")}
+  </div>`;
+}
+// ═══ FIN RECURRENTES CON FECHA ═══
 
 // "Flores 250000, Cabello 400.000" → [{name,amount}]. El valor al final es opcional.
 function parseLoanItems(text){
@@ -3065,7 +3241,7 @@ function doExportReport(){
   // Recurring
   L.push(`## Recurrentes (${(d.recurring||[]).length})`);
   (d.recurring||[]).forEach(r=>{
-    L.push(`- [${r.type}] ${r.description} · ${r.user==="shared"?"compartido":nm(r.user)} · ${money(r.amount)}${r.debtMonths>1?" · "+r.debtMonths+" meses":""}${(r.overrides&&Object.keys(r.overrides).length)?" · "+Object.keys(r.overrides).length+" ajustes":""}`);
+    L.push(`- [${r.type}] ${r.description} · ${r.user==="shared"?"compartido":nm(r.user)} · ${money(r.amount)} · ${recWhen(r)}${r.debtMonths>1?" · "+r.debtMonths+" meses":""}${(r.overrides&&Object.keys(r.overrides).length)?" · "+Object.keys(r.overrides).length+" ajustes":""}`);
   });
   L.push("");
   L.push(`## Wishlist (${(d.wishlist||[]).length})`);
@@ -3375,6 +3551,7 @@ function monthFlow(d,mk){
       incomes.push({id:r.id,name:r.description||r.category,user:r.user==="A"?"A":"B",amount:ovTotal(ov,r.amount),kind:"income",editable:true,baseAmount:r.amount,isGross:!!r.isGross,sub:r.isGross?"bruto · neto pendiente":r.isEstimated?"neto estimado":""});
       return;
     }
+    if(!recInMonth(r,mk))return;
     const isCuota=r.type==="debt"&&(r.debtMonths||0)>1;
     let base=r.amount;
     if(isCuota){
@@ -3384,7 +3561,7 @@ function monthFlow(d,mk){
     }
     const amt=ovTotal(ov,base);
     const s=r.user==="shared"?recSplitForMonth(r,mk,base,sp):null;
-    outs.push({id:r.id,name:r.description||r.category,user:r.user,amount:amt,kind:isCuota?"cuota":"fijo",editable:!isCuota,...parts(r.user,amt,s||{})});
+    outs.push({id:r.id,name:r.description||r.category,user:r.user,amount:amt,kind:isCuota?"cuota":"fijo",editable:!isCuota,yearly:isYearly(r),sub:isYearly(r)?"pago anual":"",...parts(r.user,amt,s||{})});
   });
   (d.entries||[]).filter(e=>e.type==="debt"&&(e.debtMonths||0)>1&&!e.closed).forEach(e=>{
     const el=moElapsed((e.debtStart||e.date||mk).slice(0,7),mk);
@@ -3477,6 +3654,7 @@ function curveEvents(d,rows){
     if(inRange(last)>=0)ev.push({key:last,text:`Última libranza · ${e.description}: la nómina sube ${fmt(minPaymentOf(d,e))}`});
   });
   rows.forEach(r=>r.flow.oneoffs.forEach(o=>ev.push({key:r.key,text:`Entra ${o.name}: ${fmt(o.amount)}`})));
+  rows.forEach(r=>r.flow.outs.filter(o=>o.yearly).forEach(o=>ev.push({key:r.key,text:`Pago anual · ${o.name}: ${fmt(o.amount)}`})));
   rows.forEach(r=>r.flow.outs.filter(o=>o.kind==="plan").forEach(o=>ev.push({key:r.key,text:`Sale ${o.name}: ${fmt(o.amount)}`})));
   const fin=(d.juntos||{}).financiacion;
   if(fin&&inRange(fin.date.slice(0,7))>=0)ev.push({key:fin.date.slice(0,7),text:`Vence la financiación del apartamento: ${fmt(fin.amount)}. Se cubre con el crédito; su cuota aún no está en la curva`});
@@ -3513,18 +3691,37 @@ function recActions(it,canRegister){
 function renderRecForm(d){
   const f=recForm;if(!f)return"";
   const isInc=f.type==="income";
+  const isDebt=f.type==="debt";
+  const yearly=!isInc&&!isDebt&&f.freq==="yearly";
   const users=isInc?[["A",d.names.A],["B",d.names.B]]:[["shared","Compartido"],["A","Solo "+d.names.A],["B","Solo "+d.names.B]];
   const cats=f.user==="shared"?(d.cats.shared||[]):(d.cats.personal||[]);
+  const chip=(on,txt,js)=>`<div class="chip${on?" on":""}" onclick="${js};render()">${txt}</div>`;
+  const dayInp=`<input type="text" inputmode="numeric" maxlength="2" placeholder="Ej: 5" value="${escH(f.day||"")}" oninput="this.value=this.value.replace(/[^0-9]/g,'');recForm.day=this.value"/>`;
+  const sched=isInc?`
+    <label class="fl">¿Cuándo llega?</label>
+    <div class="chips">${chip(f.pay!=="monthly","Quincenal (15 y 30)","recForm.pay='quincenal'")}${chip(f.pay==="monthly","Una vez al mes","recForm.pay='monthly'")}</div>
+    ${f.pay==="monthly"?`<label class="fl">Día del mes</label>${dayInp}`:""}
+    <div class="rec-help">Se registra solo ese día${f.pay==="monthly"?"":": la mitad el 15 y la otra mitad el 30"}. Si un mes no llega, bórralo.</div>`:`
+    ${isDebt?"":`<label class="fl">¿Cada cuánto?</label>
+    <div class="chips">${chip(!yearly,"Cada mes","recForm.freq='monthly'")}${chip(yearly,"Cada año","recForm.freq='yearly'")}</div>`}
+    ${yearly?`<label class="fl">Fecha de pago</label>
+    <div style="display:flex;gap:8px;"><select style="flex:2;" onchange="recForm.month=this.value"><option value="">Mes…</option>${MO_LARGO.map((m,i)=>`<option value="${i+1}"${Number(f.month)===i+1?" selected":""}>${m}</option>`).join("")}</select><div style="flex:1;">${dayInp}</div></div>`
+    :`<label class="fl">Día de pago</label>${dayInp}`}
+    <div class="rec-help">${yearly?"Te pregunto 7 días antes si ya lo pagaste.":"Desde ese día te pregunto si ya lo registraste o pagaste."}</div>`;
+  const what=isInc?"ingreso":isDebt?"cuota":yearly?"gasto anual":"gasto mensual";
   return`<div class="j-form">
-    <div class="ct" style="margin-bottom:8px;">${f.id?"Editar":"Nuevo"} ${isInc?"ingreso mensual":"gasto mensual"}</div>
+    <div class="ct" style="margin-bottom:8px;">${f.id?"Editar":"Nuevo"} ${what}</div>
+    ${isDebt?`<div style="font-size:14px;margin-bottom:6px;">${escH(f.description)}</div>
+    <div class="rec-help" style="margin-top:0;">El valor y las cuotas se cambian en Deudas; aquí solo el día de pago.</div>`:`
     <label class="fl">${isInc?"¿Qué ingreso es?":"¿Qué gasto es?"}</label>
-    <input type="text" placeholder="${isInc?"Ej: Salario, arriendo recibido…":"Ej: Mercado, internet, gimnasio…"}" value="${escH(f.description)}" oninput="recForm.description=this.value"/>
-    <label class="fl">Monto al mes (COP)</label>
+    <input type="text" placeholder="${isInc?"Ej: Salario, arriendo recibido…":yearly?"Ej: SOAT, impuesto del carro…":"Ej: Mercado, internet, gimnasio…"}" value="${escH(f.description)}" oninput="recForm.description=this.value"/>
+    <label class="fl">${yearly?"Monto al año (COP)":"Monto al mes (COP)"}</label>
     <input type="text" inputmode="numeric" placeholder="$ 0" value="${fmtInit(f.amount)}" oninput="fmtAmountInput(this,v=>recForm.amount=v)"/>
     <label class="fl">${isInc?"¿De quién?":"¿De quién es?"}</label>
     <div class="chips">${users.map(([v,l])=>`<div class="chip${f.user===v?" on":""}" onclick="setRecUser('${v}')">${escH(l)}</div>`).join("")}</div>
     ${isInc?"":`<label class="fl">Categoría</label>
-    <select onchange="recForm.category=this.value">${cats.map(c=>`<option value="${escH(c)}"${c===f.category?" selected":""}>${escH(c)}</option>`).join("")}</select>`}
+    <select onchange="recForm.category=this.value">${cats.map(c=>`<option value="${escH(c)}"${c===f.category?" selected":""}>${escH(c)}</option>`).join("")}</select>`}`}
+    ${sched}
     <div style="display:flex;gap:8px;">
       <button class="btn" style="margin:0;flex:1;padding:11px;" onclick="doSaveRec()" ${saving?"disabled":""}>${f.id?"💾 Guardar":"＋ Agregar"}</button>
       <button class="btn btn-dark" style="margin:0;width:48px;padding:11px;" onclick="recForm=null;render()">✕</button>
@@ -3639,22 +3836,35 @@ function defaultRecCat(d,u){
 function doNewRec(type){
   const d=D();
   const user=type==="income"?"A":"shared";
-  recForm={id:null,type,description:"",amount:"",user,category:type==="income"?"💸Nomina":defaultRecCat(d,user)};
+  recForm={id:null,type,description:"",amount:"",user,category:type==="income"?"💸Nomina":defaultRecCat(d,user),pay:"quincenal",freq:"monthly",day:"",month:""};
   render();
 }
-function doEditRec(id){
+function doEditRec(id,where){
   const rid=Number(id)||id;
   const r=(D().recurring||[]).find(x=>x.id===rid);if(!r)return;
-  recForm={id:rid,type:r.type,description:r.description||"",amount:String(r.amount||""),user:r.user,category:r.category||""};
+  recForm={id:rid,type:r.type,description:r.description||"",amount:String(r.amount||""),user:r.user,category:r.category||"",
+    pay:r.pay||"quincenal",freq:isYearly(r)?"yearly":"monthly",day:r.day?String(r.day):"",month:r.month?String(r.month):"",where:where||""};
   render();
 }
 async function doSaveRec(){
   const f=recForm;if(!f)return;
   const amt=Number(f.amount);
+  const isInc=f.type==="income",isDebt=f.type==="debt";
+  const yearly=!isInc&&!isDebt&&f.freq==="yearly";
+  const day=f.day===""?0:Math.round(Number(f.day));
+  if(f.day!==""&&!(day>=1&&day<=31)){showToast("⚠️ El día va de 1 a 31");return;}
+  if(yearly&&(!day||!f.month)){showToast("⚠️ Elige el mes y el día");return;}
+  const sched=isInc?{pay:f.pay==="monthly"?"monthly":"quincenal",day:f.pay==="monthly"?(day||30):null}
+    :{freq:yearly?"yearly":"monthly",day:day||null,month:yearly?Number(f.month):null};
+  const d=D();
+  if(isDebt){
+    recForm=null;
+    await persist({...d,recurring:(d.recurring||[]).map(r=>r.id===f.id?{...r,...sched}:r)});
+    showToast("✓ Día de pago guardado");return;
+  }
   if(!f.description.trim()){showToast("⚠️ Ponle un nombre");return;}
   if(!amt||amt<=0){showToast("⚠️ Ingresa un monto válido");return;}
-  const d=D();
-  const data={description:f.description.trim(),amount:amt,user:f.user,category:f.category};
+  const data={description:f.description.trim(),amount:amt,user:f.user,category:f.category,...sched};
   const recurring=f.id
     ?(d.recurring||[]).map(r=>r.id===f.id?{...r,...data,isGross:r.amount===amt&&!!r.isGross,isEstimated:r.amount===amt&&!!r.isEstimated}:r)
     :[...(d.recurring||[]),{id:Date.now(),type:f.type,...data,date:today(),isRecurring:true,registeredBy:"B"}];
@@ -4060,6 +4270,7 @@ function buildProjection(d,n){
     let shTotal=0,shA=0; // shared-only: total shared outflow + A's shared contribution (for balance projection)
     // Recurring items
     (d.recurring||[]).forEach(r=>{
+      if(!recInMonth(r,key))return;
       const ov=(r.overrides&&r.overrides[key]!=null)?r.overrides[key]:null;
       let amt,isExp;
       if(r.type==="debt"&&(r.debtMonths||0)>1){
@@ -4449,6 +4660,7 @@ async function startApp(){
     localStorage.setItem("finanzas_cache",JSON.stringify(localData));
     if(lastSeenCount===0&&(localData.entries||[]).length>0){lastSeenCount=(localData.entries||[]).length;localStorage.setItem("lastSeenCount",String(lastSeenCount));}
     render();
+    runAutoIncomes();
   }
   updateSavingUI(false);
 
@@ -4456,7 +4668,7 @@ async function startApp(){
   if(pollTimer)clearInterval(pollTimer);
   pollTimer=setInterval(async()=>{
     const r=await loadFromFirebase();
-    if(r){fbOnline=true;localData=migrate(r);localStorage.setItem("finanzas_cache",JSON.stringify(localData));const ae=document.activeElement;const typing=ae&&/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);if(tab!=="agregar"&&!typing)render();updateSavingUI(false);}
+    if(r){fbOnline=true;localData=migrate(r);localStorage.setItem("finanzas_cache",JSON.stringify(localData));const ae=document.activeElement;const typing=ae&&/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);if(tab!=="agregar"&&!typing)render();updateSavingUI(false);runAutoIncomes();}
   },30000);
 }
 
