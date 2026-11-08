@@ -1,0 +1,22 @@
+TEST(async()=>{
+  T.ok("detecta Davibank",detectBank(DAVI_LINES)&&detectBank(DAVI_LINES).id==="davibank");
+  T.eq("no detecta otro banco",detectBank([T.L(1,700,[[30,"Extracto de cuenta de ahorros"]])]),null);
+  T.eq("montos",[impAmount("$ 1.014.129"),impAmount("$ 0"),impAmount("-$ 5.000"),impAmount("$ 1.234,50")],[1014129,0,-5000,1235]);
+  T.eq("periodo",impPeriod("19 sep. 2026 al 16 oct. 2026"),{from:"2026-09-19",to:"2026-10-16"});
+  T.eq("periodo que cruza el año",impPeriod("20 dic. 2026 al 18 ene. 2027"),{from:"2026-12-20",to:"2027-01-18"});
+  const p=parseDavibank(DAVI_LINES);
+  T.eq("periodo leído",p.period,{from:"2026-09-19",to:"2026-10-16"});
+  T.eq("total declarado",p.declaredTotal,1206850);
+  const cnt={};p.rows.forEach(r=>{cnt[r.section]=(cnt[r.section]||0)+1;});
+  T.eq("filas por sección",cnt,{pago:1,periodo:5,otros:1,anterior:2,interes:1});
+  T.eq("pago toma el total",p.rows.find(r=>r.section==="pago"),{section:"pago",date:"2026-09-22",ref:"",desc:"PAGO PSE",amount:93000,cuotaN:1,cuotaOf:1});
+  T.eq("compra normal",p.rows.find(r=>r.ref==="111111"),{section:"periodo",date:"2026-10-13",ref:"111111",desc:"CINE PRUEBA",amount:60000,cuotaN:1,cuotaOf:1});
+  T.eq("descripción en dos líneas",p.rows.find(r=>r.ref==="222222").desc,"FARMACIA DEL CENTRO");
+  T.eq("pago alterno sin comprobante",p.rows.find(r=>/KTAL/.test(r.desc)),{section:"periodo",date:"2026-10-07",ref:"",desc:"KTAL PAGO ALTERNO",amount:1000000,cuotaN:1,cuotaOf:36});
+  T.eq("compra a cuotas con valor completo",p.rows.find(r=>r.ref==="333333").amount,120000);
+  T.eq("compra en la página siguiente",p.rows.find(r=>r.ref==="444444").section,"periodo");
+  T.eq("otros cargos",p.rows.find(r=>r.section==="otros"),{section:"otros",date:"2026-10-16",ref:"",desc:"SEGURO DE VIDA OBLIGATORIO",amount:5490,cuotaN:1,cuotaOf:1});
+  T.eq("anteriores",p.rows.filter(r=>r.section==="anterior").map(r=>[r.desc,r.cuotaOf]),[["DIDI",1],["AVANCE CAJERO",36]]);
+  T.eq("intereses al cierre",p.rows.find(r=>r.section==="interes"),{section:"interes",date:"2026-10-16",ref:"INT",desc:"Intereses corrientes",amount:1234,cuotaN:1,cuotaOf:1});
+  T.ok("ignora encabezado de tarjeta",!p.rows.some(r=>/TITULAR/.test(r.desc)));
+});

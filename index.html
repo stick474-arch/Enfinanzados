@@ -2688,6 +2688,73 @@ function renderAjustes(){
   </div>`;
 }
 
+// ═══ IMPORTAR EXTRACTOS ═════════════════════════════════════════════════════
+// Lectores puros: reciben líneas {page,y,items:[{x,str}],text} (ver pdfToLines) y devuelven filas.
+const MESES_CORTOS={ene:1,feb:2,mar:3,abr:4,may:5,jun:6,jul:7,ago:8,sep:9,oct:10,nov:11,dic:12};
+const IMP_MONEY="-?\\$ ?-?[\\d.,]+";
+function impAmount(s){
+  const str=String(s||"");const neg=str.indexOf("-")>=0;
+  const n=Math.round(Number(str.replace(/[^\d,]/g,"").replace(",",".")))||0;
+  return neg?-n:n;
+}
+function impDate(dd,mm,yyyy){return yyyy+"-"+mm+"-"+dd;}
+function impPeriod(text){
+  const m=String(text).match(/(\d{1,2}) (ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\.? (\d{4}) al (\d{1,2}) (ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\.? (\d{4})/i);
+  if(!m)return null;
+  const f=(d,mo,y)=>y+"-"+String(MESES_CORTOS[mo.toLowerCase()]).padStart(2,"0")+"-"+String(d).padStart(2,"0");
+  return{from:f(m[1],m[2],m[3]),to:f(m[4],m[5],m[6])};
+}
+const DAVI_SECTIONS=[["Tus pagos y abonos","pago"],["Transacciones del periodo facturado","periodo"],["Otros cargos","otros"],["Transacciones de periodos anteriores","anterior"],["Para pagar tu tarjeta usa alguno de estos canales",null]];
+const DAVI_TX=new RegExp("^(\\d{2})/(\\d{2})/(\\d{4}) (?:(\\d{4,8}) )?(.+?) ("+IMP_MONEY+") (\\d+)/(\\d+) "+IMP_MONEY+" "+IMP_MONEY+"(?: [\\d,]+% [\\d,]+%)?$");
+const DAVI_PAGO=new RegExp("^(\\d{2})/(\\d{2})/(\\d{4}) (.+?)((?: "+IMP_MONEY+"){2,})$");
+const DAVI_OTRO=new RegExp("^(\\d{2})/(\\d{2})/(\\d{4}) (.+?) ("+IMP_MONEY+")$");
+function parseDavibank(lines){
+  const out={bank:"davibank",label:"Davibank",period:null,declaredTotal:null,rows:[]};
+  let sec=null,prev=null,interes=0;
+  lines.forEach(l=>{
+    const t=l.text;
+    if(!out.period&&t.indexOf(" al ")>=0){const p=impPeriod(t);if(p)out.period=p;}
+    let m=t.match(new RegExp("Valor transacciones del periodo ("+IMP_MONEY+")"));
+    if(m&&out.declaredTotal===null)out.declaredTotal=impAmount(m[1]);
+    m=t.match(new RegExp("^\\+ Intereses corrientes .*?("+IMP_MONEY+")$"));
+    if(m)interes=impAmount(m[1]);
+    const h=DAVI_SECTIONS.find(s=>t===s[0]||t.indexOf(s[0]+" ")===0);
+    if(h){sec=h[1];prev=null;return;}
+    if(!sec)return;
+    if(sec==="pago"){
+      m=t.match(DAVI_PAGO);
+      if(m){const a=m[5].match(new RegExp(IMP_MONEY,"g"));out.rows.push({section:"pago",date:impDate(m[1],m[2],m[3]),ref:"",desc:m[4].trim(),amount:impAmount(a[a.length-1]),cuotaN:1,cuotaOf:1});}
+      prev=null;return;
+    }
+    if(sec==="otros"){
+      m=t.match(DAVI_OTRO);
+      if(m)out.rows.push({section:"otros",date:impDate(m[1],m[2],m[3]),ref:"",desc:m[4].trim(),amount:impAmount(m[5]),cuotaN:1,cuotaOf:1});
+      prev=null;return;
+    }
+    m=t.match(DAVI_TX);
+    if(m){
+      const row={section:sec,date:impDate(m[1],m[2],m[3]),ref:m[4]||"",desc:m[5].trim(),amount:impAmount(m[6]),cuotaN:Number(m[7]),cuotaOf:Number(m[8])};
+      const di=l.items.find(i=>{const s=i.str.trim();return s&&!/^\d{2}\/\d{2}\/\d{4}$/.test(s)&&s!==row.ref;});
+      out.rows.push(row);prev={row,page:l.page,y:l.y,x:di?di.x:null};return;
+    }
+    // Descripción partida: una sola pieza, justo debajo de la fila y alineada con su descripción.
+    const parts=l.items.filter(i=>i.str.trim());
+    const gap=prev?prev.y-l.y:99;
+    if(prev&&parts.length===1&&l.page===prev.page&&gap>0&&gap<=11&&prev.x!==null&&Math.abs(parts[0].x-prev.x)<=4&&t.indexOf("$")<0){
+      prev.row.desc+=" "+t;prev.y=l.y;return;
+    }
+    prev=null;
+  });
+  if(interes>0)out.rows.push({section:"interes",date:out.period?out.period.to:"",ref:"INT",desc:"Intereses corrientes",amount:interes,cuotaN:1,cuotaOf:1});
+  return out;
+}
+const IMPORT_BANKS=[
+  {id:"davibank",label:"Davibank",parse:parseDavibank,
+   test:lines=>lines.some(l=>/Extracto de tu tarjeta de cr.dito/i.test(l.text))&&lines.some(l=>/davibank/i.test(l.text))}
+];
+function detectBank(lines){return IMPORT_BANKS.find(b=>b.test(lines))||null;}
+// ═══ FIN IMPORTAR EXTRACTOS ═════════════════════════════════════════════════
+
 // ── Actions ────────────────────────────────────────────────────────────────
 function setForm(k,v){formState[k]=v;if(k==="user"||k==="type")formState.category="";render();}
 
