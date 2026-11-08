@@ -581,6 +581,7 @@ function render(){
   const c=document.getElementById("content");
   c.className=wide?"wide":"";
   c.innerHTML=(views[tab]||renderResumen)();
+  if(tab==="agregar"&&imp&&imp.step==="deck")bindSwipe();
   syncThemeBtn();
   const hd=document.querySelector(".hdr");
   if(hd)document.documentElement.style.setProperty("--hdr-h",hd.offsetHeight+"px");
@@ -2953,7 +2954,78 @@ function renderImportRange(d){
   </div></div>`;
 }
 // Task 6 reemplaza renderSwipe y Task 7 reemplaza renderImportSummary.
-function renderSwipe(d){return`<div class="sec"><div class="card">${impHead("Clasificar")}</div></div>`;}
+function impCat(c,dec){const o=imp.cat[c.key];return o&&catListFor(D(),dec).indexOf(o)>=0?o:suggestCategory(c.desc,dec,D());}
+function impTotals(){
+  const d=D();let shared=0,mine=0,skip=0;
+  imp.deck.forEach(c=>{const v=imp.dec[c.key];if(v==="shared")shared+=c.amount;else if(v===IMPORT_OWNER)mine+=c.amount;else if(v==="skip")skip++;});
+  return{shared,mine,skip,owes:Math.round(shared*(d.split||{A:50}).A/100)};
+}
+function decide(dec){
+  if(!imp||imp.step!=="deck")return;
+  const c=imp.deck[imp.idx];if(!c)return;
+  imp.dec[c.key]=dec;imp.hist.push(imp.idx);imp.idx++;
+  if(imp.idx>=imp.deck.length)imp.step="summary";
+  render();
+}
+function undoDecide(){
+  if(!imp||!imp.hist||!imp.hist.length)return;
+  const i=imp.hist.pop();delete imp.dec[imp.deck[i].key];
+  imp.idx=i;imp.step="deck";render();
+}
+function renderSwipe(d){
+  const c=imp.deck[imp.idx],t=impTotals(),rule=(d.importRules||{})[c.merchant];
+  const tags=[];
+  if(c.cuotaOf>1)tags.push("A "+c.cuotaOf+" cuotas · se registra el valor completo");
+  if(c.section==="anterior")tags.push("De un periodo anterior");
+  if(c.section==="otros"||c.section==="interes")tags.push("Cargo del banco");
+  return`<div class="sec"><div class="card">${impHead("Clasificar")}
+    <div class="row"><span class="lbl" id="imp-count">${imp.idx+1} de ${imp.deck.length}</span><span class="lbl">${escH(d.names.A)} debe ${fmt(t.owes)}</span></div>
+    <div class="imp-deck"><div class="imp-card" id="imp-card">
+      <div class="imp-merchant">${escH(c.desc)}</div>
+      <div class="lbl">${impDateLabel(c.date)}</div>
+      <div class="imp-amt">${fmt(c.amount)}</div>
+      ${tags.map(x=>`<span class="tag imp-tag">${x}</span>`).join("")}
+      ${rule&&DEC_LABEL[rule.decision]?`<div class="imp-hint" id="imp-last">La última vez: <b>${DEC_LABEL[rule.decision]}</b></div>`:""}
+      ${c.dup?`<div class="imp-warn" id="imp-dup">⚠️ Posible duplicado: ${escH(c.dup.description||c.dup.category||"")} · ${impDateLabel(c.dup.date)} · ${fmt(c.dup.amount)}</div>`:""}
+      <div class="imp-hint" id="imp-cats">Compartido: ${escH(impCat(c,"shared"))} · Mío: ${escH(impCat(c,IMPORT_OWNER))}</div>
+    </div></div>
+    <div class="imp-acts">
+      <button class="btn" style="background:var(--pb);color:#fff;" onclick="decide('${IMPORT_OWNER}')">← Mío</button>
+      <button class="btn btn-dark" onclick="decide('skip')">↑ No</button>
+      <button class="btn btn-green" onclick="decide('shared')">Compartido →</button>
+    </div>
+    <button class="btn-sm btn-dark" id="imp-undo" onclick="undoDecide()" ${imp.hist.length?"":"disabled"}>↶ Deshacer</button>
+    <div class="imp-hint" id="imp-live">Compartido ${fmt(t.shared)} · Mío ${fmt(t.mine)} · Sin registrar ${t.skip}</div>
+  </div></div>`;
+}
+// Arrastre con dedo o mouse: más de 90 px a un lado o hacia arriba decide; menos, la tarjeta vuelve.
+function bindSwipe(){
+  const el=document.getElementById("imp-card");if(!el)return;
+  let sx=0,sy=0,dx=0,dy=0,on=false;
+  const dir=()=>dx>90?"r":dx<-90?"l":(dy<-90&&Math.abs(dy)>Math.abs(dx))?"u":"";
+  const clear=()=>{el.classList.remove("drag","go-r","go-l","go-u");el.style.transform="";};
+  el.addEventListener("pointerdown",e=>{on=true;sx=e.clientX;sy=e.clientY;dx=0;dy=0;el.classList.add("drag");try{el.setPointerCapture(e.pointerId);}catch(err){}});
+  el.addEventListener("pointermove",e=>{
+    if(!on)return;dx=e.clientX-sx;dy=e.clientY-sy;
+    el.style.transform="translate("+dx+"px,"+dy+"px) rotate("+(dx/18)+"deg)";
+    const k=dir();el.classList.toggle("go-r",k==="r");el.classList.toggle("go-l",k==="l");el.classList.toggle("go-u",k==="u");
+  });
+  el.addEventListener("pointerup",()=>{
+    if(!on)return;on=false;el.classList.remove("drag");
+    const k=dir();if(!k){clear();return;}
+    el.style.transform=k==="r"?"translate(120%,0) rotate(12deg)":k==="l"?"translate(-120%,0) rotate(-12deg)":"translate(0,-120%)";
+    const idx=imp.idx;
+    setTimeout(()=>{if(imp&&imp.step==="deck"&&imp.idx===idx)decide(k==="r"?"shared":k==="l"?IMPORT_OWNER:"skip");},160);
+  });
+  el.addEventListener("pointercancel",()=>{on=false;clear();});
+}
+document.addEventListener("keydown",e=>{
+  if(!imp||tab!=="agregar"||(imp.step!=="deck"&&imp.step!=="summary"))return;
+  if(e.target&&/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName||""))return;
+  const k={ArrowRight:"shared",ArrowLeft:IMPORT_OWNER,ArrowUp:"skip"}[e.key];
+  if(k&&imp.step==="deck"){e.preventDefault();decide(k);}
+  else if(e.key==="Backspace"){e.preventDefault();undoDecide();}
+});
 function renderImportSummary(d){return`<div class="sec"><div class="card">${impHead("Resumen")}</div></div>`;}
 // ═══ FIN IMPORTAR EXTRACTOS ═════════════════════════════════════════════════
 
